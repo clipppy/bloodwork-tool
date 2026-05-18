@@ -1,0 +1,54 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# prisma generated client + local sqlite
+/app/generated/prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# PATIENT DATA — never commit. Sample PDFs/docx contain real patient names.
+/samples/
+/scripts/output/
+
+# Local Claude Code session state (per-user, not portable)
+/.claude/settings.local.json
+
+# Belt and suspenders: any patient docs that escape samples/
+*.pdf
+*.docx
+!prisma/**/*.docx
