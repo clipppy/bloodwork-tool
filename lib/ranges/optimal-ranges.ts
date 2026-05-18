@@ -6,6 +6,13 @@
 // (including the 'Apoliopoprotein B' typo). The Apolipoprotein B correct spelling
 // is included as an alias.
 
+export interface InterpretationBand {
+  label: string;                          // e.g. "Negative", "Optimal", "Moderate", "High", "Equivocal", "Positive"
+  min: number | null;
+  max: number | null;
+  severity: "normal" | "borderline" | "abnormal";
+}
+
 export interface MarkerRange {
   canonicalName: string;
   aliases: string[];
@@ -16,6 +23,11 @@ export interface MarkerRange {
     male: { min: number | null; max: number | null };
     female: { min: number | null; max: number | null };
   };
+  interpretationBands?: InterpretationBand[];     // 3-zone markers (e.g. EBV antibodies, cardiac panel)
+  panelType?: "standard" | "food_sensitivity";    // marks variable per-patient panels
+  requiresConfirmation?: boolean;                 // true = doctor must verify before tool uses range
+  confirmationSource?: string;                    // citation for proposed/derived ranges
+  confirmationNotes?: string;                     // context for the doctor when reviewing
   category: string;
   increaseCauses: string[];
   decreaseCauses: string[];
@@ -432,8 +444,14 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ebv early antigen igg",
     ],
     unit: "U/mL",
-    labRange: { min: 9, max: 10.99 },
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Negative", min: null, max: 9.0, severity: "normal" },
+      { label: "Equivocal", min: 9.0, max: 10.99, severity: "borderline" },
+      { label: "Positive", min: 10.99, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Quest Diagnostics reference cutoffs",
     category: "immune_thyroid",
     increaseCauses: [],
     decreaseCauses: [],
@@ -449,8 +467,14 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ebv viral capsid igm",
     ],
     unit: "U/mL",
-    labRange: { min: null, max: 43.99 },
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Negative", min: null, max: 36.0, severity: "normal" },
+      { label: "Equivocal", min: 36.0, max: 43.99, severity: "borderline" },
+      { label: "Positive", min: 43.99, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Quest Diagnostics reference cutoffs",
     category: "immune_thyroid",
     increaseCauses: [],
     decreaseCauses: [],
@@ -466,8 +490,14 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ebv viral capsid igg",
     ],
     unit: "U/mL",
-    labRange: { min: null, max: 21.99 },
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Negative", min: null, max: 18.0, severity: "normal" },
+      { label: "Equivocal", min: 18.0, max: 21.99, severity: "borderline" },
+      { label: "Positive", min: 21.99, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Quest Diagnostics reference cutoffs",
     category: "immune_thyroid",
     increaseCauses: [],
     decreaseCauses: [],
@@ -484,8 +514,14 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ebv nuclear ag igg",
     ],
     unit: "U/mL",
-    labRange: { min: null, max: 21.99 },
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Negative", min: null, max: 18.0, severity: "normal" },
+      { label: "Equivocal", min: 18.0, max: 21.99, severity: "borderline" },
+      { label: "Positive", min: 21.99, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Quest Diagnostics reference cutoffs",
     category: "immune_thyroid",
     increaseCauses: [],
     decreaseCauses: [],
@@ -523,8 +559,6 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "Musculoskeletal pain",
       "Chronic low back pain",
       "Inflammation",
-      "ANA (Anti-nuclear Antibodies)",
-      "Thyroid",
     ],
   },
   stsh_serum_thyroid_stimulating_hormone: {
@@ -1187,12 +1221,17 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "hs-crp",
     ],
     unit: "mg/L",
-    labRange: { min: null, max: 1 },
-    optimalRange: { min: null, max: 1 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 1.0, severity: "normal" },
+      { label: "Moderate", min: 1.0, max: 3.0, severity: "borderline" },
+      { label: "High", min: 3.0, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >3.0",
   },
   ldh_lactate_dehydrogenase: {
     canonicalName: "LDH (Lactate-Dehydrogenase)",
@@ -1510,6 +1549,12 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "Cirrhosis",
     ],
   },
+  // Food sensitivity panel — variable marker set per patient.
+  // All food sensitivities use the same threshold pattern: labRange.max = 2.0
+  // Any food name with this threshold should be treated as a food sensitivity
+  // marker. The parser should handle these generically rather than requiring
+  // each food to be pre-defined. The doctor's full panel list is pending —
+  // see RANGES_REVIEW.md.
   casein: {
     canonicalName: "Casein",
     aliases: [
@@ -1521,6 +1566,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "U/mL",
     labRange: { min: null, max: 2 },
     optimalRange: { min: null, max: null },
+    panelType: "food_sensitivity",
     category: "gut",
     increaseCauses: [],
     decreaseCauses: [],
@@ -1538,6 +1584,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "U/mL",
     labRange: { min: null, max: 2 },
     optimalRange: { min: null, max: null },
+    panelType: "food_sensitivity",
     category: "gut",
     increaseCauses: [],
     decreaseCauses: [],
@@ -1553,6 +1600,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "U/mL",
     labRange: { min: null, max: 2 },
     optimalRange: { min: null, max: null },
+    panelType: "food_sensitivity",
     category: "gut",
     increaseCauses: [],
     decreaseCauses: [],
@@ -1570,6 +1618,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "U/mL",
     labRange: { min: null, max: 2 },
     optimalRange: { min: null, max: null },
+    panelType: "food_sensitivity",
     category: "gut",
     increaseCauses: [],
     decreaseCauses: [],
@@ -1585,6 +1634,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "U/mL",
     labRange: { min: null, max: 2 },
     optimalRange: { min: null, max: null },
+    panelType: "food_sensitivity",
     category: "gut",
     increaseCauses: [],
     decreaseCauses: [],
@@ -1601,6 +1651,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "U/mL",
     labRange: { min: null, max: 2 },
     optimalRange: { min: null, max: null },
+    panelType: "food_sensitivity",
     category: "gut",
     increaseCauses: [],
     decreaseCauses: [],
@@ -1650,12 +1701,17 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ldl particle",
     ],
     unit: "nmol/L",
-    labRange: { min: null, max: 1138 },
-    optimalRange: { min: null, max: 1138 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 1138, severity: "normal" },
+      { label: "Moderate", min: 1138, max: 1409, severity: "borderline" },
+      { label: "High", min: 1409, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >1409",
   },
   ldl_small: {
     canonicalName: "LDL Small",
@@ -1668,12 +1724,17 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "sdLDL",
     ],
     unit: "nmol/L",
-    labRange: { min: null, max: 142 },
-    optimalRange: { min: null, max: 142 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 142, severity: "normal" },
+      { label: "Moderate", min: 142, max: 219, severity: "borderline" },
+      { label: "High", min: 219, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >219",
   },
   ldl_medium: {
     canonicalName: "LDL Medium",
@@ -1684,12 +1745,17 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ldl medium",
     ],
     unit: "nmol/L",
-    labRange: { min: null, max: 215 },
-    optimalRange: { min: null, max: 215 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 215, severity: "normal" },
+      { label: "Moderate", min: 215, max: 301, severity: "borderline" },
+      { label: "High", min: 301, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >301",
   },
   hdl_large: {
     canonicalName: "HDL Large",
@@ -1701,12 +1767,18 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "hdl large",
     ],
     unit: "umol/L",
-    labRange: { min: 6729, max: null },
-    optimalRange: { min: 6729, max: null },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    // NOTE: inverted scale — higher values are healthier. Bands ordered by min ascending.
+    interpretationBands: [
+      { label: "High", min: null, max: 5353, severity: "abnormal" },
+      { label: "Moderate", min: 5353, max: 6729, severity: "borderline" },
+      { label: "Optimal", min: 6729, max: null, severity: "normal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: <5353",
   },
   ldl_pattern: {
     canonicalName: "LDL Pattern",
@@ -1720,10 +1792,12 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     unit: "",
     labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
+    // Categorical marker — flagging is done on string value, not numeric bands.
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: B",
+    note: "Categorical marker: Pattern A = Optimal, Pattern B = High risk. Flag as abnormal if value is 'B'.",
   },
   ldl_peak_size: {
     canonicalName: "LDL Peak Size",
@@ -1735,12 +1809,18 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "ldl peak size",
     ],
     unit: "Å",
-    labRange: { min: 222.9, max: null },
-    optimalRange: { min: 222.9, max: null },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    // NOTE: inverted scale — higher values are healthier. Bands ordered by min ascending.
+    interpretationBands: [
+      { label: "High", min: null, max: 217.4, severity: "abnormal" },
+      { label: "Moderate", min: 217.4, max: 222.9, severity: "borderline" },
+      { label: "Optimal", min: 222.9, max: null, severity: "normal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: <217.4",
   },
   apoliopoprotein_b: {
     canonicalName: "Apoliopoprotein B",
@@ -1753,35 +1833,41 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "apoliopoprotein b",
     ],
     unit: "mg/dL",
-    labRange: { min: null, max: 90 },
-    optimalRange: { min: null, max: 90 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 90, severity: "normal" },
+      { label: "Moderate", min: 90, max: 120, severity: "borderline" },
+      { label: "High", min: 120, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >/= 120",
+    note: "Chart's exact Moderate band is 90-119 (integer); High threshold is >=120. Modeled here with Moderate.max=120 / High.min=120 so the bands are contiguous.",
   },
   lipoprotein_a: {
     canonicalName: "Lipoprotein (a)",
     aliases: [
-      "A",
-      "LIPOPROTEIN",
       "LIPOPROTEIN (A)",
-      "Lipoprotein",
       "Lipoprotein (a)",
       "Lipoprotein a",
       "Lipoprotein(a)",
       "Lp(a)",
-      "a",
-      "lipoprotein",
       "lipoprotein (a)",
     ],
     unit: "nmol/L",
-    labRange: { min: null, max: 75 },
-    optimalRange: { min: null, max: 75 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 75, severity: "normal" },
+      { label: "Moderate", min: 75, max: 125, severity: "borderline" },
+      { label: "High", min: 125, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >125",
   },
   lp_pla2_activity: {
     canonicalName: "LP PLA2 Activity",
@@ -1794,12 +1880,128 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "lp pla2 activity",
     ],
     unit: "nmol/min/mL",
-    labRange: { min: null, max: 123 },
-    optimalRange: { min: null, max: 123 },
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    interpretationBands: [
+      { label: "Optimal", min: null, max: 123, severity: "normal" },
+      { label: "High", min: 123, max: null, severity: "abnormal" },
+    ],
+    confirmationSource: "Master chart (Carbone Chiropractic functional medicine report template)",
     category: "cardio_iq",
     increaseCauses: [],
     decreaseCauses: [],
-    note: "High band: >123",
+  },
+
+  // ----- Markers proposed for doctor confirmation -----
+  // These markers are not in the master chart but commonly appear on the
+  // patient panels we'll be parsing. Each is added with requiresConfirmation:
+  // true so the flagging engine refuses to use them until the doctor supplies
+  // ranges. Ranges are intentionally null — see RANGES_REVIEW.md.
+  ana_antinuclear_antibodies: {
+    canonicalName: "ANA (Anti-nuclear Antibodies)",
+    aliases: [
+      "ANA",
+      "ANA (Anti-nuclear Antibodies)",
+      "ANA Screen",
+      "ANA Screen, IFA",
+      "ANA Reflex Titer",
+      "ANA, IFA",
+      "ANA Direct",
+      "ANTI-NUCLEAR ANTIBODIES",
+      "ANTINUCLEAR ANTIBODY",
+      "Antinuclear Antibody",
+      "Antinuclear Antibodies",
+      "Anti-Nuclear Antibody",
+      "Anti-Nuclear Antibodies",
+      "ana",
+    ],
+    unit: "",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    requiresConfirmation: true,
+    confirmationSource: "Institute for Functional Medicine (IFM) — citation pending",
+    confirmationNotes:
+      "ANA is typically reported as a titer (e.g. 1:40, 1:80, 1:160) plus a pattern (homogeneous, speckled, etc.), not as a numeric value. Quest's standard reference is negative below 1:80 titer. Doctor: please confirm (a) whether you treat this as numeric or categorical, (b) the titer threshold you flag as abnormal, and (c) whether to track pattern as a separate field.",
+    category: "immune_thyroid",
+    increaseCauses: [],
+    decreaseCauses: [],
+  },
+  uric_acid: {
+    canonicalName: "Uric Acid",
+    aliases: [
+      "URIC ACID",
+      "Uric Acid",
+      "Uric Acid, Serum",
+      "Urate",
+      "uric acid",
+    ],
+    unit: "mg/dL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    requiresConfirmation: true,
+    confirmationSource: "Institute for Functional Medicine (IFM) — citation pending",
+    confirmationNotes:
+      "Standard Quest reference range is 4.0-8.0 mg/dL (men) / 2.5-7.1 mg/dL (women). Functional/IFM ranges are typically tighter (often cited as 3.5-5.5 mg/dL) but I could not locate a publicly citable IFM source document. Doctor: please supply your preferred lab range and optimal range from IFM coursework.",
+    category: "metabolic",
+    increaseCauses: [],
+    decreaseCauses: [],
+  },
+  cortisol: {
+    canonicalName: "Cortisol",
+    aliases: [
+      "CORTISOL",
+      "Cortisol",
+      "Cortisol AM",
+      "Cortisol PM",
+      "Cortisol, Total",
+      "Cortisol, Free",
+      "Cortisol, Serum",
+      "Cortisol, AM",
+      "Cortisol, PM",
+      "Serum Cortisol",
+      "Salivary Cortisol",
+      "Free Cortisol",
+      "cortisol",
+    ],
+    unit: "ug/dL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    requiresConfirmation: true,
+    confirmationSource: "Institute for Functional Medicine (IFM) — citation pending",
+    confirmationNotes:
+      "Cortisol ranges depend heavily on collection method and time of day: serum AM, serum PM, salivary diurnal (4-point), and 24-hour urine free cortisol each have different reference intervals. Doctor: please specify (a) which collection methods you accept in this tool, and (b) the IFM-aligned ranges for each. Until then, the tool will refuse to flag cortisol values.",
+    category: "endocrine",
+    increaseCauses: [],
+    decreaseCauses: [],
+  },
+  estrogens: {
+    canonicalName: "Estrogens",
+    aliases: [
+      "ESTROGENS",
+      "Estrogens",
+      "Total Estrogens",
+      "Estradiol",
+      "ESTRADIOL",
+      "E2",
+      "Estrogen",
+      "Estrone",
+      "ESTRONE",
+      "E1",
+      "Estriol",
+      "ESTRIOL",
+      "E3",
+      "estrogens",
+    ],
+    unit: "pg/mL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    requiresConfirmation: true,
+    confirmationSource: "Institute for Functional Medicine (IFM) — citation pending",
+    confirmationNotes:
+      "The chart entry 'Estrogens' is generic; labs typically report Estradiol (E2), Estrone (E1), and Estriol (E3) separately. Ranges vary by sex, menstrual cycle phase (follicular/ovulatory/luteal), menopausal status, and HRT. Doctor: please confirm (a) whether to track these as one combined marker or three separate markers (E1/E2/E3), and (b) supply IFM-cited sex- and cycle-phase-specific ranges. I could not locate a publicly citable IFM source for these.",
+    category: "endocrine",
+    increaseCauses: [],
+    decreaseCauses: [],
   },
 };
 
@@ -1813,6 +2015,22 @@ const ALIAS_INDEX = (() => {
   return idx;
 })();
 
-export function findMarker(name: string): MarkerRange | undefined {
-  return ALIAS_INDEX.get(name.toLowerCase().trim());
+export interface FoundMarker extends MarkerRange {
+  /** True when the marker carries requiresConfirmation — callers must NOT use ranges for clinical flagging. */
+  isUnconfirmed: boolean;
+}
+
+export function findMarker(name: string): FoundMarker | undefined {
+  const rec = ALIAS_INDEX.get(name.toLowerCase().trim());
+  if (!rec) return undefined;
+  return { ...rec, isUnconfirmed: rec.requiresConfirmation === true };
+}
+
+/**
+ * Returns false when a marker's ranges are not yet confirmed by the doctor.
+ * The flagging engine (to be built later) should refuse to flag any marker
+ * for which this returns false.
+ */
+export function isRangeUsable(marker: MarkerRange): boolean {
+  return marker.requiresConfirmation !== true;
 }

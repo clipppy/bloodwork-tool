@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "explore:pdfs": "tsx scripts/explore-pdfs.ts",
-    "extract:chart": "tsx scripts/extract-chart.ts"
+    "extract:chart": "tsx scripts/extract-chart.ts",
+    "validate:ranges": "tsx scripts/validate-ranges.ts"
   },
   "dependencies": {
     "docx": "^9.6.1",
