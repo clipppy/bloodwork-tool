@@ -15,8 +15,8 @@ until you give me ranges to use.
 For each of these I added an entry to the library so the parser can
 recognize the marker, but I left the ranges intentionally empty. The
 tool's flagging engine will treat these as "do not flag" until you fill
-them in. I did not put values in because I could not cite a specific IFM
-source document — and I'd rather have the tool be silent than wrong.
+them in. I'd rather have the tool be silent than guess at clinical
+ranges that aren't yours.
 
 ### ANA (Anti-nuclear Antibodies)
 - **Currently:** no range, will not flag.
@@ -33,10 +33,9 @@ source document — and I'd rather have the tool be silent than wrong.
 - **Currently:** no range, will not flag.
 - **Standard Quest reference:** 4.0-8.0 mg/dL (men), 2.5-7.1 mg/dL (women).
 - **Functional medicine often uses tighter ranges** (commonly cited around
-  3.5-5.5 mg/dL) — but I could not find a publicly citable IFM source
-  document for the exact numbers, so I left it blank.
-- **Please tell me:** the lab range and optimal range you use, from IFM
-  coursework or your own clinical practice.
+  3.5-5.5 mg/dL), but I'd rather use yours than guess.
+- **Please tell me:** the lab range and optimal range you use, plus the
+  source you pull them from (so I can document it in the tool).
 
 ### Cortisol
 - **Currently:** no range, will not flag.
@@ -47,7 +46,7 @@ source document — and I'd rather have the tool be silent than wrong.
   Each has its own reference interval and "optimal" depends on context.
 - **Please tell me:**
   1. Which collection methods do you want this tool to accept?
-  2. The IFM-aligned ranges for each.
+  2. The ranges you use for each, plus the source.
 
 ### Estrogens
 - **Currently:** no range, will not flag.
@@ -56,7 +55,7 @@ source document — and I'd rather have the tool be silent than wrong.
   by sex, menstrual cycle phase, menopausal status, and HRT.
 - **Please tell me:**
   1. One combined "Estrogens" marker or three separate markers (E1/E2/E3)?
-  2. IFM-cited ranges, with sex and cycle-phase or menopause status if applicable.
+  2. The ranges you use, with sex and cycle-phase or menopause status if applicable.
 
 ---
 
@@ -93,12 +92,10 @@ match what you have:
 | Hs-CRP            | <1.0         | 1.0-3.0          | >3.0         |
 | Lp-PLA2 Activity  | <=123        | —                | >123         |
 
-Two technical notes you can ignore unless you spot something off:
-- For Apolipoprotein B, your chart said Moderate 90-119 and High >=120.
-  The 119-to-120 gap I closed by setting Moderate.max=120 and High.min=120
-  (boundary belongs to High). Tell me if you want different behavior.
-- HDL Large and LDL Peak Size are "higher is better" — I kept that
-  semantics; nothing for you to do here, just flagging it.
+Quick clinical question: your chart shows Apolipoprotein B Moderate
+ending at 119 and High starting at 120. If a patient's value comes back
+exactly at 119.5, should the tool flag it as Moderate or High? (Right
+now I flag boundary values as the more serious category.)
 
 Note: the chart canonical name `Apoliopoprotein B` has the original typo
 preserved (your chart spelling); `Apolipoprotein B` and `ApoB` are both
@@ -119,9 +116,12 @@ expectations:
 | EBV VCA IgG           | <18.0    | 18.0-21.99    | >21.99   |
 | EBV EBNA IgG          | <18.0    | 18.0-21.99    | >21.99   |
 
-These are objective lab cutoffs, not interpretive ranges — but if you flag
-them differently (e.g. you want any positive at all to be "abnormal" vs.
-needing a specific titer level), tell me and I'll adjust.
+These are objective lab cutoffs, not interpretive ranges. One question
+on flagging behavior:
+
+- Should the tool flag any Equivocal or Positive result as abnormal, or
+  only Positive? (Right now anything in the Equivocal band shows as
+  "borderline" and only Positive shows as "abnormal.")
 
 ---
 
@@ -131,10 +131,9 @@ needing a specific titer level), tell me and I'll adjust.
 Your chart has a section on MTHFR but it's a genetic variant report, not a
 numeric lab marker. I did not add it to the numeric ranges library.
 
-**Tell me if:** you want it tracked anyway as a categorical marker (e.g.
-"C677T heterozygous", "A1298C homozygous", "no mutation", etc.) — if so
-I'll wire it up that way. Otherwise I'll leave it out and the tool will
-just skip MTHFR rows on the lab report.
+**Tell me if** you want MTHFR tracked as a categorical marker (genotype +
+status). Otherwise I'll leave it out and the tool will skip MTHFR rows on
+the lab report.
 
 ---
 
