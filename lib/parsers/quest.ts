@@ -30,6 +30,7 @@ const LAB_CODES = new Set([
   "Z3M",
   "DAL",
   "TPA",
+  "TP",
   "JI",
 ]);
 
@@ -44,6 +45,7 @@ const UNITS = [
   "cells/uL",
   "% by wt",
   "mcg/dL",
+  "mcg/L",
   "mIU/mL",
   "uIU/mL",
   "ng/mL",
@@ -298,6 +300,52 @@ const SKIP_PATTERNS: RegExp[] = [
   /^Not Reported:/i,
   /^Not established$/i,
   /^See Note:$/i,
+  // ALL-CAPS city + state + ZIP (e.g. "WETHERSFIELD, CT 06109-1252",
+  // "AUSTIN, TX 78701-3263", "BARRINGTON, RI 02806").
+  /^[A-Z][A-Z\s]*,\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/,
+  // "(This link is being provided ..." informational footer
+  /^\(This link is being provided/i,
+  // FDA disclaimer fragments — match wherever they appear on the line,
+  // because PDF reflow sometimes prefixes them with "FDA." or
+  // "Diagnostics." from the previous wrapped line.
+  /^It has not been cleared/i,
+  /\bIt has not been cleared/i,
+  /^has been validated pursuant/i,
+  /\bhas been validated pursuant/i,
+  /^This assay has been/i,
+  // Lab-site lines: "AMD QUEST DIAGNOSTICS/NICHOLS CHANTILLY, 14225 ...",
+  // "EZ QUEST DIAGNOSTICS/NICHOLS SJC, ...", "NL1 QUEST DIAGNOSTICS LLC, ..."
+  // Lab-code prefix can mix letters and digits (NL1, Z4M).
+  /^[A-Z][A-Z0-9]{1,3}\s+QUEST DIAGNOSTICS/,
+  // Sibling lab-site line for Cleveland HeartLab (omega-3 panel processor)
+  /^[A-Z][A-Z0-9]{1,3}\s+CLEVELAND HEARTLAB/i,
+  // "Dir: Patrick W Mason M.D.,PhD\tQuest Diagnostics/..." performing-site directory rows
+  /^Dir:\s+/,
+  // Collection-kit / patient-instructions footer
+  /^COLLECTION KIT GIVEN/i,
+  /^PATIENT ADVISED/i,
+  // Narrative interpretation-band lines that look value-like
+  //   "Optimal < 75 nmol/L", "High > 125 nmol/L", "Moderate 75 - 125 nmol/L"
+  /^Optimal\s*[<>=]/i,
+  /^High\s*[<>=]/i,
+  /^Low\s*[<>=]/i,
+  /^Moderate\s*\d/i,
+  /^Moderate\s+\d/i,
+  // Vitamin D narrative bands ("Deficiency: <20 ng/mL", "Insufficiency: 20-29")
+  /^Deficiency:/i,
+  /^Insufficiency:/i,
+  /^Sufficiency:/i,
+  // Urinalysis microscopic rows ("WBC NONE SEEN < OR = 5 /HPF MI", etc.) —
+  // categorical urine values aren't covered by this parser's bloodwork model.
+  /<\s*OR\s*=\s*[\d.]+\s+\/[HL]PF\b/i,
+  /\bNONE SEEN\s+NONE SEEN\b/i,
+  /\bNEGATIVE\s+NEGATIVE\b/i,
+  /^APPEARANCE\s+CLEAR\b/i,
+  /^RH TYPE\s+RH\(D\)/i,
+  // Orphan SW2 previous-value lines that ended up on their own line
+  // because the unit split forced the row to wrap:
+  //   "98.0 12/03/2025 MI", "4.0 12/03/2025 MI", "268.0 12/03/2025 MI"
+  /^[\d.]+(\s+[HL])?\s+\d{2}\/\d{2}\/\d{4}(\s+[A-Z][A-Z0-9]{1,3})?$/,
 ];
 
 const PATIENT_BANNER_NAME_RE =
@@ -377,18 +425,45 @@ function looksLikeCategoricalValue(token: string): boolean {
   );
 }
 
+// SW2-style "delta" marker rows include the previous test draw appended after
+// the unit:
+//   "238 H <200 mg/dL 280.0 H 12/03/2025 MI"
+//                     ^^^^^^^^^^^^^^^^^^^^ previous-value suffix
+// Strip everything after the current row's data (so the unit lands at the
+// trailing position again).
+const SW2_DELTA_SUFFIX_RE =
+  /\s+[\d.]+(?:\s+[HL])?\s+\d{2}\/\d{2}\/\d{4}(\s+[A-Z][A-Z0-9]{1,3})?\s*$/;
+
+function stripSw2DeltaSuffix(line: string): string {
+  return line.replace(SW2_DELTA_SUFFIX_RE, (_m, lab) => (lab ? lab : ""));
+}
+
 /** Pre-pass: join PDF-parse artifacts (lab code on next line, "(calc)"
  *  fragment, "mL/min/1.\n73m2" unit split, etc.). */
 function preprocess(rawLines: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < rawLines.length; i++) {
-    let line = rawLines[i].replace(/\s+$/, "");
+    let line = stripSw2DeltaSuffix(rawLines[i].replace(/\s+$/, ""));
 
     // Join unit fragment: "mL/min/1." + "73m2"
     if (i + 1 < rawLines.length && /\bmL\/min\/1\.\s*$/.test(line)) {
       const next = rawLines[i + 1].trim();
       if (/^73m2/.test(next)) {
         line = line.replace(/\s*$/, "") + next;
+        i++;
+      }
+    }
+
+    // Join split unit between adjacent lines (SW2 layout):
+    //   "PLATELET COUNT 239 140-400 Thousand" + "/uL"  → "...Thousand/uL"
+    //   "EGFR 101 > OR = 60 mL/min"         + "/1.73m2" → "...mL/min/1.73m2"
+    if (
+      i + 1 < rawLines.length &&
+      /\b(Thousand|Million|cells|mL\/min)\s*$/.test(line)
+    ) {
+      const next = rawLines[i + 1].trim();
+      if (/^\/(uL|1\.73m2|HPF|LPF)\b/.test(next)) {
+        line = `${line}${next}`;
         i++;
       }
     }
@@ -469,7 +544,10 @@ function detectPanelHeader(line: string): string | null {
   if (tokens.length === 0) return null;
   const last = tokens[tokens.length - 1];
   const withoutLab = isLabCode(last) ? tokens.slice(0, -1) : tokens;
-  if (withoutLab.length === 0) return null;
+  // Require ≥2 tokens — otherwise a single-token continuation like
+  // "ANTIBODIES" would get treated as a panel header and overwrite
+  // pendingNameContext set by the actual parent panel.
+  if (withoutLab.length < 2) return null;
   // Require ALL tokens to be upper-case-ish AND have no decimal numbers.
   const allCaps = withoutLab.every(
     (t) => /^[A-Z0-9,()&/.-]+$/.test(t) && !/^\d+(\.\d+)?$/.test(t),
@@ -477,7 +555,7 @@ function detectPanelHeader(line: string): string | null {
   if (!allCaps) return null;
   // Must contain at least one of these panel keywords.
   if (
-    /\b(PANEL|PROFILE|CAPACITY|VIRUS|ANTIBODY|METABOLIC|ANTIGEN|FRACTIONATION|HORMONE|DIHYDROXYVITAMIN|OMEGACHECK|EBV|EPSTEIN|VCA|EBNA)\b/.test(
+    /\b(PANEL|PROFILE|CAPACITY|VIRUS|ANTIBODY|ANTIBODIES|METABOLIC|ANTIGEN|FRACTIONATION|HORMONE|DIHYDROXYVITAMIN|OMEGACHECK|EBV|EPSTEIN|VCA|EBNA|PEROXIDASE|THYROGLOBULIN)\b/.test(
       withoutLab.join(" "),
     )
   ) {
@@ -497,6 +575,71 @@ function detectPanelHeader(line: string): string | null {
  *  short all-caps phrase that completes a panel keyword. Return the joined
  *  panel name (without the lab code).
  */
+// Continuation tokens that frequently start orphan "second-line" marker rows
+// when a panel header wraps mid-name in the appendix (THYROID PEROXIDASE +
+// ANTIBODIES, ARACHIDONIC ACID/EPA + RATIO, etc.).
+const CONTINUATION_FIRST_TOKENS = new Set(["ANTIBODIES", "RATIO"]);
+
+/** Three-line MARKER row reconstruction for SW2-style PDFs where marker
+ *  names wrap across two lines and the value appears on a third:
+ *    "CHOLESTEROL,"
+ *    "TOTAL"
+ *    "238 H <200 mg/dL MI"          (after SW2 delta-suffix strip)
+ *  Returns the joined line, or null if the pattern doesn't match. */
+function tryJoin3LineMarker(
+  lineN: string,
+  lineN1: string,
+  lineN2: string,
+): string | null {
+  const tokensN = tokenize(lineN);
+  if (tokensN.length === 0 || tokensN.length > 3) return null;
+  let nameTokensN = tokensN;
+  if (isLabCode(nameTokensN[nameTokensN.length - 1])) {
+    nameTokensN = nameTokensN.slice(0, -1);
+  }
+  if (nameTokensN.length === 0) return null;
+  if (!nameTokensN.every((t) => /^[A-Z][A-Z0-9,()&/.-]*$/.test(t))) return null;
+  if (nameTokensN.some(looksLikeValue)) return null;
+
+  const tokensN1 = tokenize(lineN1);
+  if (tokensN1.length === 0 || tokensN1.length > 3) return null;
+  // Allow parenthesized continuations like "(BUN)"
+  if (!tokensN1.every((t) => /^[A-Z(][A-Z0-9,()&/.-]*$/.test(t))) return null;
+  if (tokensN1.some(looksLikeValue)) return null;
+
+  const tokensN2 = tokenize(lineN2);
+  if (tokensN2.length < 2) return null;
+  if (!looksLikeValue(tokensN2[0])) return null;
+
+  return `${nameTokensN.join(" ")} ${tokensN1.join(" ")} ${tokensN2.join(" ")}`;
+}
+
+/** Multi-line MARKER row reconstruction: lineN is a partial panel/name
+ *  fragment (short all-caps, no value, optional trailing lab code) and lineN1
+ *  starts with a continuation token (ANTIBODIES / RATIO) and has a numeric
+ *  value. Returns the joined line ready for tryParseMarkerRow, or null.
+ *
+ *  Distinct from tryJoinMultiLinePanel because lineN1 here DOES contain a
+ *  value — we want to emit a marker row, not a panel header. */
+function tryJoinContinuationMarker(lineN: string, lineN1: string): string | null {
+  const tokensN = tokenize(lineN);
+  if (tokensN.length < 1 || tokensN.length > 4) return null;
+  let nameTokens = tokensN;
+  if (isLabCode(nameTokens[nameTokens.length - 1])) {
+    nameTokens = nameTokens.slice(0, -1);
+  }
+  if (nameTokens.length === 0) return null;
+  if (!nameTokens.every((t) => /^[A-Z][A-Z0-9,()&/.-]*$/.test(t))) return null;
+  if (nameTokens.some(looksLikeValue)) return null;
+
+  const tokensN1 = tokenize(lineN1);
+  if (tokensN1.length < 2) return null;
+  if (!CONTINUATION_FIRST_TOKENS.has(tokensN1[0])) return null;
+  if (!tokensN1.some(looksLikeValue)) return null;
+
+  return `${nameTokens.join(" ")} ${tokensN1.join(" ")}`;
+}
+
 function tryJoinMultiLinePanel(lineN: string, lineN1: string): string | null {
   const tokensN = tokenize(lineN);
   if (tokensN.length < 2) return null;
@@ -547,10 +690,13 @@ const NAME_LOWERCASE_REJECT = new Set([
 ]);
 
 // Single-token "names" that are usually narrative fragments, not markers.
+// "ANTIBODIES" / "RATIO" appear as orphan continuations of multi-line panel
+// headers (THYROID PEROXIDASE\\nANTIBODIES, ARACHIDONIC ACID/EPA\\nRATIO).
 const SINGLE_TOKEN_REJECT = new Set([
   "Appendix", "Peak", "Trough", "Range", "Phase", "Reference", "Optimal",
   "Moderate", "High", "Low", "Lower", "Higher", "Average", "Pattern",
   "Risk", "Result", "Comment", "Note", "Notes", "Source", "Test",
+  "ANTIBODIES", "RATIO",
 ]);
 
 /** Does this token look like a numeric reference range value? Used to
@@ -638,9 +784,10 @@ function tryParseMarkerRow(line: string): RowParse | null {
     if (NAME_LOWERCASE_REJECT.has(t)) return null;
   }
   // Reject only if the FIRST name token starts with a non-letter symbol.
-  // Marker names can contain "(BUN)", "(OH)2", "(IgG)" etc. in middle/end tokens.
+  // Marker names can contain "(BUN)", "(OH)2", "(IgG)" etc. in middle/end tokens,
+  // and a few markers genuinely start with a parenthesized abbreviation
+  // ("(AMH), FEMALE", "(EPA+DPA+DHA)").
   if (/^[<>\[,]/.test(nameTokens[0])) return null;
-  if (/^\(/.test(nameTokens[0])) return null;
 
   // Reject single-token marker names that are common narrative fragments.
   if (nameTokens.length === 1 && SINGLE_TOKEN_REJECT.has(nameTokens[0])) return null;
@@ -835,6 +982,46 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
       continue;
     }
 
+    // 3-line marker row (SW2 layout): name wraps across 2 lines, value on 3rd.
+    // Try this FIRST so we don't mistakenly consume line N as a panel header
+    // when it's actually the first part of a wrapped name.
+    if (i + 2 < processedLines.length) {
+      const joined3 = tryJoin3LineMarker(
+        trimmed,
+        processedLines[i + 1].text.trim(),
+        processedLines[i + 2].text.trim(),
+      );
+      if (joined3) {
+        const parsed = tryParseMarkerRow(joined3);
+        if (parsed) {
+          markers.push({ ...parsed, pageNumber, rawLine: joined3 });
+          pendingNameContext = null;
+          i += 2;
+          continue;
+        }
+      }
+    }
+
+    // Multi-line MARKER row: lineN is a panel-header fragment, lineN+1 is a
+    // continuation marker row (e.g., "THYROID PEROXIDASE NL1" + "ANTIBODIES
+    // <1 <9 IU/mL"). Try this BEFORE the panel-header join because both
+    // patterns share line N's shape but only one is a marker.
+    if (i + 1 < processedLines.length) {
+      const joinedMarker = tryJoinContinuationMarker(
+        trimmed,
+        processedLines[i + 1].text.trim(),
+      );
+      if (joinedMarker) {
+        const parsed = tryParseMarkerRow(joinedMarker);
+        if (parsed) {
+          markers.push({ ...parsed, pageNumber, rawLine: joinedMarker });
+          pendingNameContext = null;
+          i += 1;
+          continue;
+        }
+      }
+    }
+
     // Multi-line panel header: lab code wraps from line N into line N+1.
     if (i + 1 < processedLines.length) {
       const joined = tryJoinMultiLinePanel(trimmed, processedLines[i + 1].text.trim());
@@ -865,6 +1052,15 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
         parsed.rawName = `${pendingNameContext} ${parsed.rawName}`;
         pendingNameContext = null;
       } else if (pendingNameContext && /\bSEX HORMONE BINDING\b/.test(pendingNameContext) && /^GLOBULIN\b/.test(parsed.rawName)) {
+        parsed.rawName = `${pendingNameContext} ${parsed.rawName}`;
+        pendingNameContext = null;
+      } else if (
+        // Body-section SHBG: panel header is "SEX HORMONE BINDING GLOBULIN"
+        // but the value row drops the trailing "GLOBULIN". Promote the
+        // header name onto the marker so it isn't truncated.
+        pendingNameContext === "SEX HORMONE BINDING GLOBULIN" &&
+        parsed.rawName === "SEX HORMONE BINDING"
+      ) {
         parsed.rawName = pendingNameContext;
         pendingNameContext = null;
       } else {
