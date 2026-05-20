@@ -14,6 +14,84 @@ import type { ParseResult, ParsedMarker, PatientMeta } from "./types";
 
 const PARSER_VERSION = "1.0.0";
 
+// ---- Post-extraction filters --------------------------------------------
+
+/** True if the parsed row is a Cardio IQ band-table threshold rather than a
+ *  patient reading. Function-distributed Quest PDFs include a 3-column
+ *  "Optimal / Moderate / High" table at the end of the appendix for six
+ *  cardiac markers, and the rows look superficially like marker rows.
+ *
+ *  The signature isn't just a threshold-shaped value — many legitimate
+ *  readings use "<8" / ">600" because the result is below/above the assay's
+ *  linear range. A band row is identified by the COMBINATION of a threshold-
+ *  shaped value AND a referenceRangeRaw that itself contains the band-list
+ *  (a numeric interval adjacent to another comparison threshold, or "N/A"). */
+export function looksLikeBandRow(marker: ParsedMarker): boolean {
+  const valueStr = String(marker.value).trim();
+  const range = (marker.referenceRangeRaw ?? "").trim();
+
+  // LDL PATTERN legitimately has single-letter categorical values "A" / "B".
+  // Treat as a band row only when the range carries the band-list signature
+  // ("N/A" marks the missing threshold for the alternate pattern).
+  if (marker.rawName.toUpperCase() === "LDL PATTERN" && /^[AB]$/.test(valueStr)) {
+    return /\bN\/A\b/i.test(range);
+  }
+
+  const valueIsThresholdShaped =
+    /^[<>]=?\s*[\d.]+$/.test(valueStr) ||
+    /^[<>]\s*or\s*=\s*[\d.]+$/i.test(valueStr) ||
+    /^\d+(\.\d+)?-\d+(\.\d+)?$/.test(valueStr) ||
+    /^(N\/A|NA)$/i.test(valueStr);
+  if (!valueIsThresholdShaped) return false;
+
+  // Range must also look like a band list:
+  //   "1138-1409 >1409", "6729-5353 <5353"  (numeric range + threshold)
+  //   "<5353 5353-6729"                     (threshold + numeric range)
+  //   contains "N/A"
+  const rangeLooksLikeBandList =
+    /\d+(\.\d+)?-\d+(\.\d+)?\s+[<>]=?\s*[\d.]+/.test(range) ||
+    /[<>]=?\s*[\d.]+\s+\d+(\.\d+)?-\d+(\.\d+)?/.test(range) ||
+    /\bN\/A\b/i.test(range);
+
+  return rangeLooksLikeBandList;
+}
+
+/** Deduplicate by exact (rawName, value, unit, referenceRangeRaw) tuple,
+ *  keeping the first occurrence. Returns the survivors plus the list of
+ *  rawNames whose multiple occurrences disagreed on value/unit/range
+ *  (caller emits PARSER GAP warnings for these). */
+export function dedupMarkers(markers: ParsedMarker[]): {
+  deduped: ParsedMarker[];
+  removed: number;
+  divergentNames: string[];
+} {
+  const seenTuples = new Set<string>();
+  const deduped: ParsedMarker[] = [];
+  const byName = new Map<string, Set<string>>();
+  let removed = 0;
+
+  for (const m of markers) {
+    const tuple = `${m.rawName}||${String(m.value)}||${m.unit ?? ""}||${m.referenceRangeRaw ?? ""}`;
+    if (seenTuples.has(tuple)) {
+      removed += 1;
+      continue;
+    }
+    seenTuples.add(tuple);
+    deduped.push(m);
+
+    const tuples = byName.get(m.rawName) ?? new Set<string>();
+    tuples.add(`${String(m.value)}||${m.unit ?? ""}||${m.referenceRangeRaw ?? ""}`);
+    byName.set(m.rawName, tuples);
+  }
+
+  const divergentNames: string[] = [];
+  for (const [name, tuples] of byName) {
+    if (tuples.size > 1) divergentNames.push(name);
+  }
+
+  return { deduped, removed, divergentNames };
+}
+
 // ---- Known token sets -----------------------------------------------------
 
 // Quest's lab-site codes — short uppercase tokens that appear at the END of
@@ -1079,10 +1157,34 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
     unparsedLines.push(trimmed);
   }
 
+  // Post-processing: drop Cardio IQ band-table threshold rows that look like
+  // marker rows, then dedupe the body-vs-appendix reprints that Health
+  // Gorilla wraps into each Function-distributed Quest PDF.
+  const beforeBandFilter = markers.length;
+  const filtered = markers.filter((m) => !looksLikeBandRow(m));
+  const bandRowsRejected = beforeBandFilter - filtered.length;
+
+  const { deduped, removed: duplicatesRemoved, divergentNames } =
+    dedupMarkers(filtered);
+
+  for (const name of divergentNames) {
+    // PARSER GAP: same marker name reported with two different value/unit/
+    // range tuples. Could be a current+historical comparison or a real
+    // parsing mismatch — surface for human review.
+    console.warn(
+      `// PARSER GAP: divergent values for marker "${name}" — keeping all occurrences`,
+    );
+  }
+
   return {
-    markers,
+    markers: deduped,
     patientMeta: meta,
     unparsedLines,
     parserVersion: PARSER_VERSION,
+    stats: {
+      duplicatesRemoved,
+      bandRowsRejected,
+      divergentValueNames: divergentNames,
+    },
   };
 }

@@ -43,4 +43,13 @@ export interface ParseResult {
    *  were intentionally skipped (page headers, disclaimers, etc.). */
   unparsedLines: string[];
   parserVersion: string;
+  /** Post-processing counts emitted by the dedupe / band-row filter passes.
+   *  Useful for the test harness; downstream consumers can ignore. */
+  stats?: {
+    duplicatesRemoved: number;
+    bandRowsRejected: number;
+    /** Same rawName seen with at least two different (value/unit/range)
+     *  tuples — kept in markers[] but surfaced here for human review. */
+    divergentValueNames: string[];
+  };
 }
