@@ -10,7 +10,8 @@
     "explore:pdfs": "tsx scripts/explore-pdfs.ts",
     "extract:chart": "tsx scripts/extract-chart.ts",
     "validate:ranges": "tsx scripts/validate-ranges.ts",
-    "test:parser": "tsx scripts/test-parser.ts"
+    "test:parser": "tsx scripts/test-parser.ts",
+    "cli": "tsx cli/index.ts"
   },
   "dependencies": {
     "docx": "^9.6.1",
