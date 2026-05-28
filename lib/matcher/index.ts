@@ -306,7 +306,11 @@ export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
       );
     }
 
-    const requiresConfirmation = winner.rec.requiresConfirmation === true;
+    // Pending = legacy requiresConfirmation flag still set AND no source
+    // populated. Post-2026-05-27 refactor, none of the bundled markers hit
+    // this branch — it's a safety net for future additions.
+    const confirmationPending =
+      winner.rec.requiresConfirmation === true && !winner.rec.confirmationSource;
 
     out.push({
       ...base,
@@ -314,10 +318,8 @@ export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
       optimalRange: buildOptimalRange(winner.rec),
       matchStatus: "matched",
       matchConfidence: winner.confidence,
-      confirmationPending: requiresConfirmation,
-      // Per spec: confirmationSource stays null until Melissa confirms,
-      // even though the optimal-ranges record has a citation-pending note.
-      confirmationSource: null,
+      confirmationPending,
+      confirmationSource: winner.rec.confirmationSource ?? null,
       notes,
     });
   }
