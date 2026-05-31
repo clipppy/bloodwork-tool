@@ -11,6 +11,7 @@
     "extract:chart": "tsx scripts/extract-chart.ts",
     "validate:ranges": "tsx scripts/validate-ranges.ts",
     "validate:flagging": "tsx scripts/validate-flagging.ts",
+    "extract:narratives": "tsx scripts/extract-narratives.ts",
     "test:parser": "tsx scripts/test-parser.ts",
     "cli": "tsx cli/index.ts"
   },
