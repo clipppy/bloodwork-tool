@@ -132,15 +132,18 @@ export const MARKER_NARRATIVES: Record<string, MarkerNarrative> = {
     canonicalName: "Apoliopoprotein B",
     description: `High levels of ApoB correspond to higher levels of “bad” cholesterol (LDL and VLDL cholesterol) and are associated with a higher risk of heart disease.
 ApoB represents the total number of atherogenic particles (LDL, VLDL, IDL, Lp(a)).
-Each atherogenic particle has one ApoB, so ApoB = particle count.
-High ApoB means:
-Too many plaque-forming particles
-Increased arterial wall penetration
-Higher ASCVD risk even if LDL-C looks “normal”
-Need a CAC test - calcium score test to truly confirm`,
+Each atherogenic particle has one ApoB, so ApoB = particle count.`,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        intro: `High ApoB means:`,
+        bullets: [
+          `Too many plaque-forming particles`,
+          `Increased arterial wall penetration`,
+          `Higher ASCVD risk even if LDL-C looks “normal”`,
+          `Need a CAC test - calcium score test to truly confirm`,
+        ],
+      },
   },
   "Arachidonic Acid": {
     canonicalName: "Arachidonic Acid",
@@ -303,12 +306,7 @@ Need a CAC test - calcium score test to truly confirm`,
   },
   "Cortisol": {
     canonicalName: "Cortisol",
-    description: `Blood 8-10AM:
-Saliva:
-8-10AM	Result:			Lab Range (0.04-0.56)
-12-2PM	Result:			Lab Range (0.21)
-4-6PM		Result:			Lab Range (0.15)
-10PM-1AM	Result:			Lab Range (0.09)`,
+    description: ``,
     increaseCauses: [],
     decreaseCauses: [],
     additionalProse: null,
@@ -442,10 +440,7 @@ Epstein-Barr virus (EBV) – A member of the herpes family of viruses, EBV infec
   },
   "Ferritin": {
     canonicalName: "Ferritin",
-    description: `Ferritin is the second most abundant iron-bearing protein in the body. It functions as an iron storage depot in the liver, spleen and bone marrow. 3 factors generally determine serum ferritin levels:
-the iron content of body tissues
-the rate of ferritin dispersal from the tissues
-the rate of ferritin extraction from the blood`,
+    description: `Ferritin is the second most abundant iron-bearing protein in the body. It functions as an iron storage depot in the liver, spleen and bone marrow. 3 factors generally determine serum ferritin levels:`,
     increaseCauses: [
           "Iron overload/hemochromatosis",
           "Inflammatory disease",
@@ -456,7 +451,13 @@ the rate of ferritin extraction from the blood`,
     decreaseCauses: [
           "Iron deficiency anemia"
     ],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `the iron content of body tissues`,
+          `the rate of ferritin dispersal from the tissues`,
+          `the rate of ferritin extraction from the blood`,
+        ],
+      },
   },
   "GGT (Gamma-Glutamyl Transpeptidase)": {
     canonicalName: "GGT (Gamma-Glutamyl Transpeptidase)",
@@ -597,11 +598,14 @@ the rate of ferritin extraction from the blood`,
   },
   "Insulin": {
     canonicalName: "Insulin",
-    description: `Insulin is a hormone produced by the pancreas and is the main transporter of glucose from the blood into cells.
-High/Normal levels of insulin indicate early stages of insulin resistance and metabolic syndrome.`,
+    description: `Insulin is a hormone produced by the pancreas and is the main transporter of glucose from the blood into cells.`,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `High/Normal levels of insulin indicate early stages of insulin resistance and metabolic syndrome.`,
+        ],
+      },
   },
   "Iron": {
     canonicalName: "Iron",
@@ -625,25 +629,28 @@ High/Normal levels of insulin indicate early stages of insulin resistance and me
   "LDH (Lactate-Dehydrogenase)": {
     canonicalName: "LDH (Lactate-Dehydrogenase)",
     description: `LDH is an enzyme that is found in almost all of the body's cells (as well as in bacteria) and is released from cells into the fluid portion of blood (serum or plasma) when cells are damaged or destroyed. Thus, the blood level of LD is a general indicator of tissue and cellular damage. The level of LD may also rise in other types of body fluids (e.g.,cerebrospinal fluid, pleural fluid, etc.) in the presence of certain diseases.
-An elevated level of LD may be seen with:
-Hemolytic anemia
-Pernicious anemia (vitamin B anemia)
-Infections such as infectious mononucleosis (mono), meningitis, encephalitis, HIV
-Sepsis
-Intestinal and lung (pulmonary) infarction
-Acute kidney disease
-Acute liver disease
-Acute muscle injury
-Pancreatitis
-Bone fractures
-Testicular cancer, lymphoma or other cancers`,
+An elevated level of LD may be seen with:`,
     increaseCauses: [],
     decreaseCauses: [
           "LDH deficiency affects how the body breaks down sugar for use as energy in cells, particularly muscle cells.",
           "Very common with digestive dysfunction.",
           "You may also have low LDH levels if you’ve consumed a large amount of ascorbic acid (vitamin C)."
     ],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `Hemolytic anemia`,
+          `Pernicious anemia (vitamin B anemia)`,
+          `Infections such as infectious mononucleosis (mono), meningitis, encephalitis, HIV`,
+          `Sepsis`,
+          `Intestinal and lung (pulmonary) infarction`,
+          `Acute kidney disease`,
+          `Acute liver disease`,
+          `Acute muscle injury`,
+          `Pancreatitis`,
+          `Bone fractures`,
+          `Testicular cancer, lymphoma or other cancers`,
+        ],
+      },
   },
   "LDL (Low Density Lipoprotein Cholesterol)": {
     canonicalName: "LDL (Low Density Lipoprotein Cholesterol)",
@@ -660,34 +667,44 @@ Testicular cancer, lymphoma or other cancers`,
   },
   "LDL Medium": {
     canonicalName: "LDL Medium",
-    description: `For the same reasons as above`,
+    description: ``,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `For the same reasons as above`,
+        ],
+      },
   },
   "LDL Particle": {
     canonicalName: "LDL Particle",
-    description: `The number of LDL particles, not the cholesterol inside them.
-LDL-P may be elevated for those with metabolic syndrome and insulin resistance.  You don’t have either of these conditions.
-Your A1C is falsely elevated due to increased glycation.
-Glucose gets stored in triglycerides, and then packaged into LDL particles. This means there may not be enough space left over for cholesterol, so the liver compensates by increasing LDL particle production.
-We need to correct methylation and improve sugar metabolism and how your body handles sugar in the blood stream and this will decrease
-Along those lines, metabolic syndrome is often associated with metabolic endotoxemia, always secondary to leaky gut syndrome. This process involves overgrowth of pathogenic gut flora which produce a toxin called LPS (lipopolysaccharides). LPS can get released into the bloodstream from a sufficiently inflamed gut. One of the mechanisms by which the body combats this is via a protein called the LPS-binding protein, which circulate along with the ApoB on the LDL-P. Therefore, in the presence of metabolic endotoxemia, the body will increase LDL-P production. The treatment in this case, of course, is to heal the gut so that the leakage ceases.
-Your blood work does indicate digestive dysfunction that could lead to an overgrowth of bad bacteria in the gut.  There were not any markers tested to identify an imbalance in gut bacteria.  We are first going to correct digestion and remove any food triggers to decrease gut inflammation and the body can oftentimes correct itself if an overgrowth of bacteria exists.`,
+    description: `The number of LDL particles, not the cholesterol inside them.`,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `LDL-P may be elevated for those with metabolic syndrome and insulin resistance.  You don’t have either of these conditions.`,
+          `Your A1C is falsely elevated due to increased glycation.`,
+          `Glucose gets stored in triglycerides, and then packaged into LDL particles. This means there may not be enough space left over for cholesterol, so the liver compensates by increasing LDL particle production.`,
+          `We need to correct methylation and improve sugar metabolism and how your body handles sugar in the blood stream and this will decrease`,
+          `Along those lines, metabolic syndrome is often associated with metabolic endotoxemia, always secondary to leaky gut syndrome. This process involves overgrowth of pathogenic gut flora which produce a toxin called LPS (lipopolysaccharides). LPS can get released into the bloodstream from a sufficiently inflamed gut. One of the mechanisms by which the body combats this is via a protein called the LPS-binding protein, which circulate along with the ApoB on the LDL-P. Therefore, in the presence of metabolic endotoxemia, the body will increase LDL-P production. The treatment in this case, of course, is to heal the gut so that the leakage ceases.`,
+          `Your blood work does indicate digestive dysfunction that could lead to an overgrowth of bad bacteria in the gut.  There were not any markers tested to identify an imbalance in gut bacteria.  We are first going to correct digestion and remove any food triggers to decrease gut inflammation and the body can oftentimes correct itself if an overgrowth of bacteria exists.`,
+        ],
+      },
   },
   "LDL Pattern": {
     canonicalName: "LDL Pattern",
     description: `Measures whether LDL particles are large and buoyant (Pattern A) or small and dense (Pattern B).
-Pattern A (larger particles):
-Less atherogenic
-Pattern B (smaller particles):
-More atherogenic`,
+Pattern A (larger particles):`,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `Less atherogenic`,
+          `More atherogenic`,
+        ],
+        outro: `Pattern B (smaller particles):`,
+      },
   },
   "LDL Peak Size": {
     canonicalName: "LDL Peak Size",
@@ -698,13 +715,17 @@ More atherogenic`,
   },
   "LDL Small": {
     canonicalName: "LDL Small",
-    description: `Increased glycation (adding glucose onto hemoglobin) after eating a meal can elevate this marker
-Proper methylation pathways are needed to ensure that sugars are utilized efficiently
-Consumption of grains and sugars–Any food that fuels the liver’s conversion of sugars to triglycerides that yields increased VLDL (very low-density lipoproteins) in the blood leads to formation of small LDL particles.
-Endotoxemia–i.e., the entry of microbial byproducts into the bloodstream from dysbiosis (imbalance of good and bad bacteria in the gut)`,
+    description: ``,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `Increased glycation (adding glucose onto hemoglobin) after eating a meal can elevate this marker`,
+          `Proper methylation pathways are needed to ensure that sugars are utilized efficiently`,
+          `Consumption of grains and sugars–Any food that fuels the liver’s conversion of sugars to triglycerides that yields increased VLDL (very low-density lipoproteins) in the blood leads to formation of small LDL particles.`,
+          `Endotoxemia–i.e., the entry of microbial byproducts into the bloodstream from dysbiosis (imbalance of good and bad bacteria in the gut)`,
+        ],
+      },
   },
   "LH (Luteinizing Hormone)": {
     canonicalName: "LH (Luteinizing Hormone)",
@@ -814,77 +835,90 @@ Endotoxemia–i.e., the entry of microbial byproducts into the bloodstream from 
   "MPV (Mean Platelet Volume)": {
     canonicalName: "MPV (Mean Platelet Volume)",
     description: `Platelets, also called thrombocytes, are tiny fragments of cells that are essential for normal blood clotting. They are formed from very large cells called megakaryocytes in the bone marrow and are released into the blood to circulate. The platelet count is a test that determines the number of platelets in a person's sample of blood.
-A low platelet count, also called thrombocytopenia, and accompanying signs and symptoms may be caused by a number of conditions and factors. The causes typically fall into one of two general categories:
-Disorders in which the bone marrow cannot produce enough platelets
-Conditions in which platelets are used up (consumed) or destroyed faster than normal
-Examples of conditions causing a low platelet count include:
-Idiopathic thrombocytopenia (ITP), also known as immune thrombocytopenic purpura, is the result of antibody production against platelets.
-Viral infections such as mononucleosis, hepatitis, HIV or measles
-Certain drugs, such as aspirin and ibuprofen, some antibiotics (including those containing sulfa), colchicine and indomethacin, H2-blocking agents, hydralazine, isoniazid, quinidine, thiazide diuretics, and tolbutamide, are just a few that have been associated with drug-induced decreased platelet counts.
-Heparin-induced thrombocytopenia (HIT) results in low platelets when a person who is on or received heparin therapy develops an antibody. (For more on this, see the article on HIT Antibody)
-Leukemia, lymphoma, or another cancer that has spread (metastasized) to the bone marrow—people with cancers often experience excessive bleeding due to a significantly decreased number of platelets. As the number of cancer cells increases in the bone marrow, normal bone marrow cells are crowded out, resulting in fewer platelet-producing cells.
-Aplastic anemia—a condition in which the production of all blood cells is significantly reduced
-Long-term bleeding problems (e.g., chronic bleeding from stomach ulcers)
-Sepsis, especially that caused by a serious bacterial infection with Gram-negative bacteria
-Cirrhosis
-Autoimmune disorders, such as lupus, where the body's immune system produces antibodies that attack its own organs or tissues, causing increased destruction of platelets
-Chemotherapy or radiation therapy, which may affect the bone marrow's ability to produce platelets
-Platelet consumption may be observed in various diseases and conditions. For example, disseminated intravascular coagulation (DIC), thrombocytopenic purpura (TTP) and hemolytic uremic syndrome (HUS) can result in fewer circulating platelets in the blood.
-Exposure to toxic chemicals, such as pesticides, arsenic, or benzene
-If the platelet count falls below 20,000 per microliter, spontaneous bleeding may occur and is considered a life-threatening risk. A person with a very low count may be given platelets through a transfusion. See Blood and Blood Components in the Blood Banking article for more details.
-A high platelet count may be referred to as thrombocytosis. This is usually the result of an existing condition (also called secondary or reactive thrombocytosis) such as:
-Cancer, most commonly lung, gastrointestinal, ovarian, breast or lymphoma
-Anemia, in particular iron-deficiency anemia and hemolytic anemia
-Inflammatory conditions such as inflammatory bowel disease (IBD) or rheumatoid arthritis
-Infectious diseases such as tuberculosis
-If an individual has had their spleen removed surgically
-Use of birth control pills (oral contraceptives)
-Some conditions may cause a temporary (transitory) increased platelet count. These may include:
-Recovery from significant blood loss such as from trauma or major surgery
-After physical activity or exertion
-Recovery from excess alcohol consumption and vitamin B12 and folate deficiency
-Rarely, thrombocytosis is caused by a bone marrow disorder. An example is thrombocythemia, also called primary or essential thrombocythemia, a rare myeloproliferative disorder in which the bone marrow produces an extremely high number of platelets. Often there are no signs and symptoms and the condition is discovered when testing is done for a health check or for other reasons.`,
+A low platelet count, also called thrombocytopenia, and accompanying signs and symptoms may be caused by a number of conditions and factors. The causes typically fall into one of two general categories:`,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: null,
+    additionalProse: {
+        bullets: [
+          `Disorders in which the bone marrow cannot produce enough platelets`,
+          `Conditions in which platelets are used up (consumed) or destroyed faster than normal`,
+          `Examples of conditions causing a low platelet count include:`,
+          `Idiopathic thrombocytopenia (ITP), also known as immune thrombocytopenic purpura, is the result of antibody production against platelets.`,
+          `Viral infections such as mononucleosis, hepatitis, HIV or measles`,
+          `Certain drugs, such as aspirin and ibuprofen, some antibiotics (including those containing sulfa), colchicine and indomethacin, H2-blocking agents, hydralazine, isoniazid, quinidine, thiazide diuretics, and tolbutamide, are just a few that have been associated with drug-induced decreased platelet counts.`,
+          `Heparin-induced thrombocytopenia (HIT) results in low platelets when a person who is on or received heparin therapy develops an antibody. (For more on this, see the article on HIT Antibody)`,
+          `Leukemia, lymphoma, or another cancer that has spread (metastasized) to the bone marrow—people with cancers often experience excessive bleeding due to a significantly decreased number of platelets. As the number of cancer cells increases in the bone marrow, normal bone marrow cells are crowded out, resulting in fewer platelet-producing cells.`,
+          `Aplastic anemia—a condition in which the production of all blood cells is significantly reduced`,
+          `Long-term bleeding problems (e.g., chronic bleeding from stomach ulcers)`,
+          `Sepsis, especially that caused by a serious bacterial infection with Gram-negative bacteria`,
+          `Cirrhosis`,
+          `Autoimmune disorders, such as lupus, where the body's immune system produces antibodies that attack its own organs or tissues, causing increased destruction of platelets`,
+          `Chemotherapy or radiation therapy, which may affect the bone marrow's ability to produce platelets`,
+          `Platelet consumption may be observed in various diseases and conditions. For example, disseminated intravascular coagulation (DIC), thrombocytopenic purpura (TTP) and hemolytic uremic syndrome (HUS) can result in fewer circulating platelets in the blood.`,
+          `Exposure to toxic chemicals, such as pesticides, arsenic, or benzene`,
+          `If the platelet count falls below 20,000 per microliter, spontaneous bleeding may occur and is considered a life-threatening risk. A person with a very low count may be given platelets through a transfusion. See Blood and Blood Components in the Blood Banking article for more details.`,
+          `Cancer, most commonly lung, gastrointestinal, ovarian, breast or lymphoma`,
+          `Anemia, in particular iron-deficiency anemia and hemolytic anemia`,
+          `Inflammatory conditions such as inflammatory bowel disease (IBD) or rheumatoid arthritis`,
+          `Infectious diseases such as tuberculosis`,
+          `If an individual has had their spleen removed surgically`,
+          `Use of birth control pills (oral contraceptives)`,
+          `Some conditions may cause a temporary (transitory) increased platelet count. These may include:`,
+          `Recovery from significant blood loss such as from trauma or major surgery`,
+          `After physical activity or exertion`,
+          `Recovery from excess alcohol consumption and vitamin B12 and folate deficiency`,
+          `Rarely, thrombocytosis is caused by a bone marrow disorder. An example is thrombocythemia, also called primary or essential thrombocythemia, a rare myeloproliferative disorder in which the bone marrow produces an extremely high number of platelets. Often there are no signs and symptoms and the condition is discovered when testing is done for a health check or for other reasons.`,
+        ],
+        outro: `A high platelet count may be referred to as thrombocytosis. This is usually the result of an existing condition (also called secondary or reactive thrombocytosis) such as:`,
+      },
   },
   "MTHFR": {
     canonicalName: "MTHFR",
     description: ``,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: `Educational Information only:
-MTHFR = methylenetetrahydrofolate reductase is a folate dependent enzyme involved in remethylation of homocysteine to methionine
-Genes C677T and A1298C.
-Having this copy of this gene is associated with a reduction in the MTHFR enzyme activity leading to increased homocysteine particularly when associated with lower plasma folate.
-Having a MTHFR mutation means that the enzyme that converts folic acid into it’s activated form (5-MTHF) acts sluggishly.
-Methylation is required for many processes in the body, from breaking down histamine, serotonin and dopamine to turning DNA on and off. Consequently, having a defective methylation capability is associated with psychiatric illnesses, such as schizophrenia, depression and bipolar, as well as autoimmunity disorders, ADD, autism, spina bifida, Down’s syndrome, miscarriages, and cancer.
-Defective methylation can come from not having the 5-MTHF or not having enough B12, so the disorders and symptoms associated with the MTHFR mutations often overlap with those due to B12 deficiency.
-Both copies have been implicated in several neurological and psychiatric disorders
-Having copies of this mutation have been shown to be risk factors for depression especially in older adults
-This leads to increased levels of homocysteine and interferes with neurotransmitter synthesis pathways in serotonin, norepinephrine, and dopamine – which are folate dependent pathways
-Hyperhomocysteinemia is an independent risk factor for coronary artery disease, acute myocardial infarction, peripheral arterial disease, stroke, and venous thromboembolism.
-Recommended Treatment for MTHFR Mutation:
-Eliminate gluten from your diet especially wheat
-DO NOT Limit ingestion of folic acid and folic acid containing foods
-Dark leafy greens, spinach, kale, collards, romaine lettuce
-Asparagus
-Broccoli
-Citrus fruits, papaya, oranges, grapefruit, strawberries, raspberries
-Beans, peas, lentils
-Avocado
-Okra
-Brussels sprouts
-Seeds and nuts
-Cauliflower
-Beets
-Corn
-Celery
-Carrots
-Squash
-Avoid drugs that increase homocysteine levels such as nitric oxide in dentistry
-Avoid antacids as they block the absorption of vitamin B12 and other nutrients
-As long as you are taking a methylated form of folate, you will be able to tolerate these foods in your diet.  You will have to take this specialized form of B vitamin for the rest of your life due to your bodies inability to absorb B vitamins unless they are methylated.`,
+    additionalProse: [
+      {
+        intro: `Educational Information only:`,
+        bullets: [
+          `MTHFR = methylenetetrahydrofolate reductase is a folate dependent enzyme involved in remethylation of homocysteine to methionine`,
+          `Genes C677T and A1298C.`,
+          `Having this copy of this gene is associated with a reduction in the MTHFR enzyme activity leading to increased homocysteine particularly when associated with lower plasma folate.`,
+          `Having a MTHFR mutation means that the enzyme that converts folic acid into it’s activated form (5-MTHF) acts sluggishly.`,
+          `Methylation is required for many processes in the body, from breaking down histamine, serotonin and dopamine to turning DNA on and off. Consequently, having a defective methylation capability is associated with psychiatric illnesses, such as schizophrenia, depression and bipolar, as well as autoimmunity disorders, ADD, autism, spina bifida, Down’s syndrome, miscarriages, and cancer.`,
+          `Defective methylation can come from not having the 5-MTHF or not having enough B12, so the disorders and symptoms associated with the MTHFR mutations often overlap with those due to B12 deficiency.`,
+          `Both copies have been implicated in several neurological and psychiatric disorders`,
+          `Having copies of this mutation have been shown to be risk factors for depression especially in older adults`,
+          `This leads to increased levels of homocysteine and interferes with neurotransmitter synthesis pathways in serotonin, norepinephrine, and dopamine – which are folate dependent pathways`,
+          `Hyperhomocysteinemia is an independent risk factor for coronary artery disease, acute myocardial infarction, peripheral arterial disease, stroke, and venous thromboembolism.`,
+        ],
+      },
+      {
+        intro: `Recommended Treatment for MTHFR Mutation:`,
+        bullets: [
+          `Eliminate gluten from your diet especially wheat`,
+          `DO NOT Limit ingestion of folic acid and folic acid containing foods`,
+          `Dark leafy greens, spinach, kale, collards, romaine lettuce`,
+          `Asparagus`,
+          `Broccoli`,
+          `Citrus fruits, papaya, oranges, grapefruit, strawberries, raspberries`,
+          `Beans, peas, lentils`,
+          `Avocado`,
+          `Okra`,
+          `Brussels sprouts`,
+          `Seeds and nuts`,
+          `Cauliflower`,
+          `Beets`,
+          `Corn`,
+          `Celery`,
+          `Carrots`,
+          `Squash`,
+          `Avoid drugs that increase homocysteine levels such as nitric oxide in dentistry`,
+          `Avoid antacids as they block the absorption of vitamin B12 and other nutrients`,
+        ],
+        outro: `As long as you are taking a methylated form of folate, you will be able to tolerate these foods in your diet.  You will have to take this specialized form of B vitamin for the rest of your life due to your bodies inability to absorb B vitamins unless they are methylated.`,
+      },
+    ],
   },
   "Magnesium": {
     canonicalName: "Magnesium",
@@ -1128,7 +1162,8 @@ Eating quality wild caught fatty fish helps with heart and brain function.  We a
   },
   "T3 Free": {
     canonicalName: "T3 Free",
-    description: `T3 is a thyroid hormone produced mainly from peripheral conversion of thyroxine (T4). T3 has a higher biological activity than T4 and will bind to protein (thyroid binding globulin, transthyretin, and albumin) less efficiently than T4. T3 and T4 exist in the serum in both bound and free forms.`,
+    description: `T3 is a thyroid hormone produced mainly from peripheral conversion of thyroxine (T4). T3 has a higher biological activity than T4 and will bind to protein (thyroid binding globulin, transthyretin, and albumin) less efficiently than T4. T3 and T4 exist in the serum in both bound and free forms.
+T3 and T4:`,
     increaseCauses: [
           "Primary hyperthyroidism (Grave's)",
           "Acute thyroiditis (Early Hashimoto's)"
@@ -1139,11 +1174,12 @@ Eating quality wild caught fatty fish helps with heart and brain function.  We a
           "Iodine insufficiency",
           "Cushing's disease"
     ],
-    additionalProse: `T3 and T4:`,
+    additionalProse: null,
   },
   "T3 Total": {
     canonicalName: "T3 Total",
-    description: `T3 is a thyroid hormone produced mainly from peripheral conversion of thyroxine (T4). T3 has a higher biological activity than T4 and will bind to protein (thyroid binding globulin, transthyretin, and albumin) less efficiently than T4. T3 and T4 exist in the serum in both bound and free forms.`,
+    description: `T3 is a thyroid hormone produced mainly from peripheral conversion of thyroxine (T4). T3 has a higher biological activity than T4 and will bind to protein (thyroid binding globulin, transthyretin, and albumin) less efficiently than T4. T3 and T4 exist in the serum in both bound and free forms.
+T3 and T4:`,
     increaseCauses: [
           "Primary hyperthyroidism (Grave's)",
           "Acute thyroiditis (Early Hashimoto's)"
@@ -1154,11 +1190,12 @@ Eating quality wild caught fatty fish helps with heart and brain function.  We a
           "Iodine insufficiency",
           "Cushing's disease"
     ],
-    additionalProse: `T3 and T4:`,
+    additionalProse: null,
   },
   "T4 Free": {
     canonicalName: "T4 Free",
-    description: `T4 is the major hormone secreted by the thyroid gland. T4 secretion is stimulated by thyroid stimulating hormone (TSH). Free T4 is a very small portion of total thyroxine and is the metabolically active fraction.`,
+    description: `T4 is the major hormone secreted by the thyroid gland. T4 secretion is stimulated by thyroid stimulating hormone (TSH). Free T4 is a very small portion of total thyroxine and is the metabolically active fraction.
+T3 and T4:`,
     increaseCauses: [
           "Primary hyperthyroidism (Grave's)",
           "Acute thyroiditis (Early Hashimoto's)"
@@ -1169,11 +1206,12 @@ Eating quality wild caught fatty fish helps with heart and brain function.  We a
           "Iodine insufficiency",
           "Cushing's disease"
     ],
-    additionalProse: `T3 and T4:`,
+    additionalProse: null,
   },
   "T4 Total": {
     canonicalName: "T4 Total",
-    description: `T4 is the major hormone secreted by the thyroid gland. T4 secretion is stimulated by thyroid stimulating hormone (TSH). Free T4 is a very small portion of total thyroxine and is the metabolically active fraction.`,
+    description: `T4 is the major hormone secreted by the thyroid gland. T4 secretion is stimulated by thyroid stimulating hormone (TSH). Free T4 is a very small portion of total thyroxine and is the metabolically active fraction.
+T3 and T4:`,
     increaseCauses: [
           "Primary hyperthyroidism (Grave's)",
           "Acute thyroiditis (Early Hashimoto's)"
@@ -1184,7 +1222,7 @@ Eating quality wild caught fatty fish helps with heart and brain function.  We a
           "Iodine insufficiency",
           "Cushing's disease"
     ],
-    additionalProse: `T3 and T4:`,
+    additionalProse: null,
   },
   "TIBC (Total Iron Binding Capacity)": {
     canonicalName: "TIBC (Total Iron Binding Capacity)",
@@ -1441,13 +1479,15 @@ Epstein-Barr virus (EBV) – A member of the herpes family of viruses, EBV infec
   {
     groupName: "T4",
     members: ["T4 Total","T4 Free"],
-    description: `T4 is the major hormone secreted by the thyroid gland. T4 secretion is stimulated by thyroid stimulating hormone (TSH). Free T4 is a very small portion of total thyroxine and is the metabolically active fraction.`,
-    additionalProse: `T3 and T4:`,
+    description: `T4 is the major hormone secreted by the thyroid gland. T4 secretion is stimulated by thyroid stimulating hormone (TSH). Free T4 is a very small portion of total thyroxine and is the metabolically active fraction.
+T3 and T4:`,
+    additionalProse: null,
   },
   {
     groupName: "T3",
     members: ["T3 Total","T3 Free"],
-    description: `T3 is a thyroid hormone produced mainly from peripheral conversion of thyroxine (T4). T3 has a higher biological activity than T4 and will bind to protein (thyroid binding globulin, transthyretin, and albumin) less efficiently than T4. T3 and T4 exist in the serum in both bound and free forms.`,
-    additionalProse: `T3 and T4:`,
+    description: `T3 is a thyroid hormone produced mainly from peripheral conversion of thyroxine (T4). T3 has a higher biological activity than T4 and will bind to protein (thyroid binding globulin, transthyretin, and albumin) less efficiently than T4. T3 and T4 exist in the serum in both bound and free forms.
+T3 and T4:`,
+    additionalProse: null,
   },
 ];

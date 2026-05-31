@@ -31,10 +31,11 @@ import {
 } from "docx";
 import type { FlaggedMarker } from "../flagging";
 import { findMarker } from "../ranges/optimal-ranges";
-import {
-  MARKER_NARRATIVES,
-} from "../narratives/marker-narratives";
-import type { MarkerNarrative } from "../narratives/types";
+import { MARKER_NARRATIVES } from "../narratives/marker-narratives";
+import type {
+  MarkerNarrative,
+  AdditionalProseBlock,
+} from "../narratives/types";
 
 // ----- Brand -----
 const NAVY = "1B365D";
@@ -49,81 +50,110 @@ const PAGE_HEIGHT = 15840;
 const PAGE_MARGIN = 1440;
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2; // 9360
 
-// ----- Panel ordering -----
-// Drives PART I marker rendering. Markers in flaggedMarker[] that aren't in
-// this list are appended at the end under "Additional Markers".
-const PANEL_ORDER: string[] = [
-  // CBC
-  "RBC (Red Blood Cell)", "Hemoglobin", "Hematocrit",
-  "MCV (Mean Corpuscular Volume)", "MCH (Mean Corpuscular Hemoglobin)",
-  "MCHC (Mean Corpuscular Hemoglobin Concentration)",
-  "RDW (Red Cell Distribution Width)", "Platelets", "MPV (Mean Platelet Volume)",
-  // WBC differential
-  "WBC (White Blood Cell)", "Neutrophils", "Lymphocytes", "Monocytes",
-  "Eosinophils", "Basophils",
-  // Epstein-Barr
-  "EBV Early Antigen IgG", "EBV Viral Capsid IgM", "EBV Viral Capsid IgG", "EBV Nuclear AG IgG",
-  // Vitamin D
-  "Vitamin D 25-OH", "Vitamin D 1,25 (OH)2 Total", "Vitamin D2", "Vitamin D3",
-  // ANA
-  "ANA (Anti-nuclear Antibodies)",
-  // Thyroid
-  "sTSH (Serum Thyroid Stimulating Hormone)",
-  "T4 Free", "T4 Total", "T3 Free", "T3 Total",
-  "Thyroid Peroxidase", "Thyroglobulin Antibodies",
-  // Kidney
-  "BUN (Blood Urea Nitrogen)", "Creatinine", "BUN/Creatinine Ratio", "eGFR",
-  // Liver
-  "AST (Aspartate Aminotransferase)", "ALT (Alanine Aminotransferase)",
-  "Alkaline Phosphatase", "Total Bilirubin", "Total Protein",
-  "Albumin", "A/G Ratio", "Globulin",
-  "GGT (Gamma-Glutamyl Transpeptidase)",
-  // Cholesterol
-  "Cholesterol", "LDL (Low Density Lipoprotein Cholesterol)", "Triglycerides",
-  "HDL (High Density Lipoprotein)",
-  // Blood sugar
-  "Hemoglobin A1C", "Glucose", "Insulin",
-  // Systemic inflammation
-  "Hs-CRP", "LDH (Lactate-Dehydrogenase)",
-  // Electrolytes
-  "Calcium", "Sodium", "Potassium", "Chloride", "CO2 (Carbon Dioxide)",
-  // Minerals / vitamins / methylation
-  "Magnesium", "Magnesium RBC", "Vitamin B12", "Homocysteine",
-  "Methylmalonic Acid", "Uric Acid", "MTHFR",
-  // Iron
-  "Iron", "Ferritin", "% Iron Saturation", "TIBC (Total Iron Binding Capacity)",
-  // Food sensitivities
-  "Casein", "Cacao", "Corn", "Soy", "Eggwhite", "Wheat", "Yeast",
-  // Gut / vitamins
-  "Vitamin B6", "Candida Albicans",
-  // Cortisol
-  "Cortisol",
-  // Hormones
-  "Estrogens", "Estradiol (E2)", "Estrone (E1)", "Estriol (E3)",
-  "Testosterone Total", "Testosterone Free", "Testosterone Bioavailable",
-  "SHBG (Sex Hormone Binding Globulin)", "DHEA Sulfate",
-  "Progesterone", "Prolactin", "Pregnenolone",
-  "FSH (Follicle Stimulating Hormone)", "LH (Luteinizing Hormone)",
-  "AMH (Anti-Mullerian Hormone)",
-  "PSA Total", "PSA Free", "PSA % Free",
-  // Misc
-  "Rheumatoid Factor", "Lead Venous", "Mercury Blood",
-  "Leptin", "Amylase", "Lipase", "ABO Group",
-  "Albumin Urine", "Specific Gravity", "Urine pH",
-  // Omega panel
-  "EPA", "DHA", "DPA", "Omega-3 Total", "Omega-6 Total", "Omega-6/Omega-3 Ratio",
-  "Arachidonic Acid", "Arachidonic Acid/EPA Ratio", "Linoleic Acid",
-  // Cardio IQ
-  "LDL Particle", "LDL Small", "LDL Medium", "HDL Large",
-  "LDL Pattern", "LDL Peak Size", "Apoliopoprotein B",
-  "Lipoprotein (a)", "LP PLA2 Activity", "Omega Check",
+// ----- Per-section header spacing (consistent across all marker headers) -----
+const HEADER_SPACING_BEFORE = 240;
+const HEADER_SPACING_AFTER = 120;
+
+// ----- Panel grouping -----
+// PART I groups markers under panel headings. Panels with zero markers
+// from the current PDF are skipped (no empty headers).
+interface Panel {
+  name: string;
+  /** Canonical names in display order. */
+  members: string[];
+}
+
+const PANELS: Panel[] = [
+  { name: "Complete Blood Count", members: [
+    "RBC (Red Blood Cell)", "Hemoglobin", "Hematocrit",
+    "MCV (Mean Corpuscular Volume)", "MCH (Mean Corpuscular Hemoglobin)",
+    "MCHC (Mean Corpuscular Hemoglobin Concentration)",
+    "RDW (Red Cell Distribution Width)", "Platelets", "MPV (Mean Platelet Volume)",
+  ]},
+  { name: "WBC Differential", members: [
+    "WBC (White Blood Cell)", "Neutrophils", "Lymphocytes", "Monocytes",
+    "Eosinophils", "Basophils",
+  ]},
+  { name: "Epstein-Barr", members: [
+    "EBV Early Antigen IgG", "EBV Viral Capsid IgM", "EBV Viral Capsid IgG", "EBV Nuclear AG IgG",
+  ]},
+  { name: "Vitamin D", members: [
+    "Vitamin D 25-OH", "Vitamin D 1,25 (OH)2 Total", "Vitamin D2", "Vitamin D3",
+  ]},
+  { name: "ANA", members: ["ANA (Anti-nuclear Antibodies)"] },
+  { name: "Thyroid", members: [
+    "sTSH (Serum Thyroid Stimulating Hormone)", "T4 Free", "T4 Total",
+    "T3 Free", "T3 Total", "Thyroid Peroxidase", "Thyroglobulin Antibodies",
+  ]},
+  { name: "Kidney", members: [
+    "BUN (Blood Urea Nitrogen)", "Creatinine", "BUN/Creatinine Ratio", "eGFR",
+  ]},
+  { name: "Liver", members: [
+    "AST (Aspartate Aminotransferase)", "ALT (Alanine Aminotransferase)",
+    "Alkaline Phosphatase", "Total Bilirubin", "Total Protein",
+    "Albumin", "A/G Ratio", "Globulin",
+    "GGT (Gamma-Glutamyl Transpeptidase)",
+  ]},
+  { name: "Lipid Panel", members: [
+    "Cholesterol", "LDL (Low Density Lipoprotein Cholesterol)",
+    "HDL (High Density Lipoprotein)", "Triglycerides",
+  ]},
+  { name: "Glucose Metabolism", members: [
+    "Glucose", "Hemoglobin A1C", "Insulin",
+  ]},
+  { name: "Inflammation", members: ["Hs-CRP"] },
+  { name: "Other Labs", members: ["LDH (Lactate-Dehydrogenase)"] },
+  { name: "Electrolytes", members: [
+    "Calcium", "Sodium", "Potassium", "Chloride", "CO2 (Carbon Dioxide)",
+  ]},
+  { name: "Minerals", members: ["Magnesium", "Magnesium RBC"] },
+  { name: "B Vitamins & Homocysteine", members: [
+    "Vitamin B12", "Vitamin B6", "Homocysteine", "Methylmalonic Acid",
+  ]},
+  { name: "Uric Acid", members: ["Uric Acid"] },
+  { name: "MTHFR", members: ["MTHFR"] },
+  { name: "Iron Panel", members: [
+    "Iron", "Ferritin", "% Iron Saturation", "TIBC (Total Iron Binding Capacity)",
+  ]},
+  { name: "Food Sensitivities", members: [
+    "Casein", "Cacao", "Corn", "Soy", "Eggwhite", "Wheat", "Yeast",
+  ]},
+  { name: "Candida", members: ["Candida Albicans"] },
+  { name: "Cortisol", members: ["Cortisol"] },
+  { name: "Hormones — Estrogens & Female", members: [
+    "Estrogens", "Estradiol (E2)", "Estrone (E1)", "Estriol (E3)",
+    "Progesterone", "Prolactin", "Pregnenolone",
+    "FSH (Follicle Stimulating Hormone)", "LH (Luteinizing Hormone)",
+    "AMH (Anti-Mullerian Hormone)",
+  ]},
+  { name: "Hormones — Androgens & PSA", members: [
+    "Testosterone Total", "Testosterone Free", "Testosterone Bioavailable",
+    "SHBG (Sex Hormone Binding Globulin)", "DHEA Sulfate",
+    "PSA Total", "PSA Free", "PSA % Free",
+  ]},
+  { name: "Heavy Metals", members: ["Lead Venous", "Mercury Blood"] },
+  { name: "Cardio IQ", members: [
+    "LDL Particle", "LDL Small", "LDL Medium", "HDL Large",
+    "LDL Pattern", "LDL Peak Size", "Apoliopoprotein B",
+    "Lipoprotein (a)", "LP PLA2 Activity", "Omega Check",
+  ]},
+  { name: "Omega Panel", members: [
+    "EPA", "DHA", "DPA", "Omega-3 Total", "Omega-6 Total", "Omega-6/Omega-3 Ratio",
+    "Arachidonic Acid", "Arachidonic Acid/EPA Ratio", "Linoleic Acid",
+  ]},
+  { name: "Miscellaneous", members: [
+    "Leptin", "Amylase", "Lipase", "Rheumatoid Factor", "ABO Group",
+  ]},
+  { name: "Urinalysis", members: [
+    "Albumin Urine", "Specific Gravity", "Urine pH",
+  ]},
 ];
 
 // ----- Public API -----
 
 export interface GeneratorOptions {
   patientName: string;
-  patientDate: string; // ISO date string or any display-ready string
+  patientDate: string;
 }
 
 export async function generateWordReport(
@@ -137,34 +167,42 @@ export async function generateWordReport(
 // ----- Document assembly -----
 
 function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Document {
-  // Render groups:
-  //   PART I = every matched marker EXCEPT not_flaggable-without-source.
-  //     Matched + flaggable → standard render.
-  //     Matched + not_flaggable + Melissa-confirmed source (or any populated
-  //       confirmationSource) → render with "no range available" note so
-  //       Melissa's hormone / vitamin D / sentinel panels are still visible
-  //       in the report per spec.
-  //   Appendix = unmatched + matched-but-not_flaggable-without-source.
+  // PART I = every matched marker EXCEPT not_flaggable-without-source.
   const matched = flagged.filter(
     (f) =>
       f.matchStatus === "matched" &&
       (f.flagStatus !== "not_flaggable" || !!f.confirmationSource),
   );
-  const unmatched = flagged.filter(
+  const appendix = flagged.filter(
     (f) =>
       f.matchStatus !== "matched" ||
       (f.flagStatus === "not_flaggable" && !f.confirmationSource),
   );
 
-  // Sort matched into panel order; unknown markers append.
-  const orderIndex = new Map<string, number>();
-  PANEL_ORDER.forEach((name, i) => orderIndex.set(name, i));
-  const sortedMatched = [...matched].sort((a, b) => {
-    const ai = orderIndex.get(a.canonicalName) ?? Number.MAX_SAFE_INTEGER;
-    const bi = orderIndex.get(b.canonicalName) ?? Number.MAX_SAFE_INTEGER;
-    if (ai !== bi) return ai - bi;
-    return a.canonicalName.localeCompare(b.canonicalName);
-  });
+  // Bucket matched markers by panel; preserve declared panel-member order.
+  const panelBuckets = new Map<string, FlaggedMarker[]>();
+  const additionalBucket: FlaggedMarker[] = [];
+  const memberPanel = new Map<string, { name: string; rank: number }>();
+  for (const panel of PANELS) {
+    panel.members.forEach((name, i) => {
+      memberPanel.set(name, { name: panel.name, rank: i });
+    });
+    panelBuckets.set(panel.name, []);
+  }
+  for (const m of matched) {
+    const ref = memberPanel.get(m.canonicalName);
+    if (ref) panelBuckets.get(ref.name)!.push(m);
+    else additionalBucket.push(m);
+  }
+  // Sort within each panel by declared member rank.
+  for (const panel of PANELS) {
+    const bucket = panelBuckets.get(panel.name)!;
+    bucket.sort((a, b) => {
+      const ar = memberPanel.get(a.canonicalName)!.rank;
+      const br = memberPanel.get(b.canonicalName)!.rank;
+      return ar - br;
+    });
+  }
 
   const children: Array<Paragraph | Table> = [];
 
@@ -177,9 +215,9 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   children.push(
     new Paragraph({
       children: [
-        runBold(`Patient: `, NAVY),
+        runBold("Patient: ", NAVY),
         runPlain(opts.patientName + "    "),
-        runBold(`Date: `, NAVY),
+        runBold("Date: ", NAVY),
         runPlain(opts.patientDate),
       ],
       spacing: { after: 240 },
@@ -203,10 +241,17 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   }
   children.push(blankParagraph());
 
-  // PART I
+  // PART I — markers grouped by panel
   children.push(partHeading("PART I — Lab Values and Data Analysis"));
-  for (const m of sortedMatched) {
-    children.push(...renderMarker(m));
+  for (const panel of PANELS) {
+    const bucket = panelBuckets.get(panel.name)!;
+    if (bucket.length === 0) continue;
+    children.push(...panelDivider(panel.name));
+    for (const m of bucket) children.push(...renderMarker(m));
+  }
+  if (additionalBucket.length > 0) {
+    children.push(...panelDivider("Additional Markers"));
+    for (const m of additionalBucket) children.push(...renderMarker(m));
   }
 
   // PART II
@@ -222,8 +267,27 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   children.push(partHeading("PART III — Dietary and Supplement Recommendations"));
   children.push(placeholder("[Practitioner to complete]"));
 
+  // Pages compatibility note (after PART III, before appendix)
+  children.push(blankParagraph());
+  children.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 200, after: 100 },
+      children: [
+        new TextRun({
+          text:
+            "Note: open this document in Microsoft Word or Google Docs for correct formatting. Apple Pages may not render all table content correctly.",
+          italics: true,
+          size: 18, // 9pt
+          color: NAVY,
+          font: "Arial",
+        }),
+      ],
+    }),
+  );
+
   // Appendix
-  if (unmatched.length > 0) {
+  if (appendix.length > 0) {
     children.push(blankParagraph());
     children.push(sectionHeading("Unmatched markers from this report"));
     children.push(
@@ -236,7 +300,7 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
         spacing: { after: 120 },
       }),
     );
-    for (const u of unmatched) {
+    for (const u of appendix) {
       const reason = u.flagNotes.join("; ") || "no reason recorded";
       children.push(
         new Paragraph({
@@ -254,7 +318,7 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
     creator: "Carbone Chiropractic Center, LLC",
     title: "Functional Medicine Report",
     styles: {
-      default: { document: { run: { font: "Arial", size: 22 } } }, // 11pt
+      default: { document: { run: { font: "Arial", size: 22 } } },
       paragraphStyles: [
         { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true,
           run: { size: 32, bold: true, font: "Arial", color: NAVY },
@@ -308,53 +372,82 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   });
 }
 
+// ----- Panel divider -----
+
+function panelDivider(name: string): Paragraph[] {
+  // Tiny Teal caps label
+  const label = new Paragraph({
+    alignment: AlignmentType.LEFT,
+    spacing: { before: 320, after: 60 },
+    children: [
+      new TextRun({
+        text: name.toUpperCase(),
+        bold: true,
+        size: 18, // 9pt
+        color: TEAL,
+        font: "Arial",
+        // letter-spacing approximation via character spacing
+        characterSpacing: 30,
+      }),
+    ],
+  });
+  // Thin Teal horizontal rule via bottom border on an empty paragraph
+  // (per docx skill guidance — do NOT use a table for dividers).
+  const rule = new Paragraph({
+    spacing: { before: 0, after: 80 },
+    border: {
+      bottom: { style: BorderStyle.SINGLE, size: 8, color: TEAL, space: 1 },
+    },
+    children: [],
+  });
+  return [label, rule];
+}
+
 // ----- Per-marker rendering -----
 
 function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
   const out: Array<Paragraph | Table> = [];
+  const narrative = MARKER_NARRATIVES[m.canonicalName];
 
-  // Section heading: marker name in Navy
+  // Section heading: marker name in Navy, consistent spacing.
   out.push(
     new Paragraph({
       children: [runBold(m.canonicalName, NAVY, 26)],
-      spacing: { before: 200, after: 80 },
+      spacing: { before: HEADER_SPACING_BEFORE, after: HEADER_SPACING_AFTER },
       keepNext: true,
     }),
   );
 
-  // Result table (single row, three columns)
+  // Result table
   out.push(buildResultTable(m));
 
-  // Sentinel / Melissa-supplied source citation when applicable.
-  if (m.confirmationSource && m.confirmationSource.startsWith("Melissa Carbone")) {
-    out.push(
-      new Paragraph({
-        spacing: { before: 40, after: 80 },
-        children: [
-          runItalic(`Range source: ${m.confirmationSource}`, GREY, 18),
-        ],
-      }),
-    );
-  } else if (m.confirmationPending) {
-    out.push(
-      new Paragraph({
-        spacing: { before: 40, after: 80 },
-        children: [
-          runItalic("Range pending confirmation from Melissa.", GREY, 18),
-        ],
-      }),
-    );
-  }
+  const hasNarrative = narrativeHasContent(narrative);
 
-  // Narrative
-  const narrative = MARKER_NARRATIVES[m.canonicalName];
-  if (narrative) {
-    out.push(...renderNarrative(narrative));
+  if (hasNarrative) {
+    // Standard rendering: source citation (if any) then narrative.
+    if (m.confirmationSource && m.confirmationSource.startsWith("Melissa Carbone")) {
+      out.push(
+        new Paragraph({
+          spacing: { before: 60, after: 80 },
+          children: [runItalic(`Range source: ${m.confirmationSource}`, GREY, 18)],
+        }),
+      );
+    } else if (m.confirmationPending) {
+      out.push(
+        new Paragraph({
+          spacing: { before: 60, after: 80 },
+          children: [runItalic("Range pending confirmation from Melissa.", GREY, 18)],
+        }),
+      );
+    }
+    out.push(...renderNarrative(narrative!));
   } else {
-    out.push(placeholder("[Clinical interpretation pending]"));
+    // Condensed empty-marker footnote: one italic line combining source +
+    // "interpretation pending" + lab-report note.
+    out.push(buildEmptyFootnote(m));
   }
 
-  // flagNotes from the flagging engine (e.g. cycle-phase note, three-tier
+  // flagNotes from the flagging engine (e.g. cycle-phase, three-tier
   // band detail). Render as small italic prose below the narrative.
   const usefulNotes = m.flagNotes.filter(
     (n) =>
@@ -363,7 +456,9 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
       !n.startsWith("rejected short-name") &&
       !n.startsWith("LDL Pattern range column artifact") &&
       !n.startsWith("appendix range preferred") &&
-      !n.startsWith("divergent value/unit"),
+      !n.startsWith("divergent value/unit") &&
+      // Already implicit in the empty-marker footnote
+      !(n === "no range available, refer to lab report" && !hasNarrative),
   );
   if (usefulNotes.length > 0) {
     out.push(
@@ -378,18 +473,39 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
   return out;
 }
 
+function narrativeHasContent(n: MarkerNarrative | undefined): boolean {
+  if (!n) return false;
+  if (n.description.length > 0) return true;
+  if (n.increaseCauses.length > 0) return true;
+  if (n.decreaseCauses.length > 0) return true;
+  if (n.additionalProse !== null) return true;
+  return false;
+}
+
+function buildEmptyFootnote(m: FlaggedMarker): Paragraph {
+  const parts: string[] = [];
+  if (m.confirmationSource && m.confirmationSource.startsWith("Melissa Carbone")) {
+    parts.push(`Range source: ${m.confirmationSource}`);
+  }
+  parts.push("Clinical interpretation to be completed by practitioner");
+  const rec = findMarker(m.canonicalName);
+  const labRange = rec?.labRange;
+  if (
+    labRange &&
+    labRange.min === null &&
+    labRange.max === null &&
+    rec?.flagType === "lab_range_only"
+  ) {
+    parts.push("refer to lab report for reference range");
+  }
+  return new Paragraph({
+    spacing: { before: 80, after: 80 },
+    children: [runItalic(parts.join(" — "), GREY, 20)],
+  });
+}
+
 function renderNarrative(n: MarkerNarrative): Paragraph[] {
   const out: Paragraph[] = [];
-  const hasAnything =
-    n.description.length > 0 ||
-    n.increaseCauses.length > 0 ||
-    n.decreaseCauses.length > 0 ||
-    (n.additionalProse !== null && n.additionalProse.length > 0);
-
-  if (!hasAnything) {
-    out.push(placeholder("[Clinical interpretation pending]"));
-    return out;
-  }
 
   if (n.description) {
     for (const para of n.description.split(/\n+/)) {
@@ -439,8 +555,18 @@ function renderNarrative(n: MarkerNarrative): Paragraph[] {
     }
   }
 
-  if (n.additionalProse) {
-    for (const para of n.additionalProse.split(/\n+/)) {
+  if (n.additionalProse !== null) {
+    out.push(...renderAdditionalProse(n.additionalProse));
+  }
+  return out;
+}
+
+function renderAdditionalProse(
+  prose: string | AdditionalProseBlock | AdditionalProseBlock[],
+): Paragraph[] {
+  const out: Paragraph[] = [];
+  if (typeof prose === "string") {
+    for (const para of prose.split(/\n+/)) {
       if (!para.trim()) continue;
       out.push(
         new Paragraph({
@@ -449,21 +575,55 @@ function renderNarrative(n: MarkerNarrative): Paragraph[] {
         }),
       );
     }
+    return out;
   }
-
+  const blocks: AdditionalProseBlock[] = Array.isArray(prose) ? prose : [prose];
+  for (const block of blocks) {
+    if (block.intro) {
+      for (const para of block.intro.split(/\n+/)) {
+        if (!para.trim()) continue;
+        out.push(
+          new Paragraph({
+            children: [runBold(para.trim(), NAVY)],
+            spacing: { before: 80, after: 40 },
+            keepNext: true,
+          }),
+        );
+      }
+    }
+    if (block.bullets && block.bullets.length > 0) {
+      for (const b of block.bullets) {
+        out.push(
+          new Paragraph({
+            numbering: { reference: "bullets", level: 0 },
+            children: [runPlain(b)],
+          }),
+        );
+      }
+    }
+    if (block.outro) {
+      for (const para of block.outro.split(/\n+/)) {
+        if (!para.trim()) continue;
+        out.push(
+          new Paragraph({
+            children: [runPlain(para.trim())],
+            spacing: { before: 60, after: 60 },
+          }),
+        );
+      }
+    }
+  }
   return out;
 }
 
 // ----- Result table -----
 
 function buildResultTable(m: FlaggedMarker): Table {
-  const col1 = 3120; // Result
-  const col2 = 3120; // Lab range
-  const col3 = CONTENT_WIDTH - col1 - col2; // Optimal range / band thresholds
+  const col1 = 3120;
+  const col2 = 3120;
+  const col3 = CONTENT_WIDTH - col1 - col2;
 
-  const cellBorder = { style: BorderStyle.SINGLE, size: 4, color: LIGHT_GREY };
-  const borders = { top: cellBorder, bottom: cellBorder, left: cellBorder, right: cellBorder };
-
+  const borders = bordersAll();
   const headerShading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
 
   const flagText = formatFlagIndicator(m);
@@ -471,7 +631,6 @@ function buildResultTable(m: FlaggedMarker): Table {
   const labRangeLabel = formatRange(m, "lab");
   const optimalLabel = formatRange(m, "optimal");
 
-  // Header row
   const headerRow = new TableRow({
     children: [
       headerCell("Result", col1, headerShading, borders),
@@ -480,7 +639,8 @@ function buildResultTable(m: FlaggedMarker): Table {
     ],
   });
 
-  // Value row — Result cell carries the flag indicator inline.
+  const indicator = formatFlagIndicatorStyling(m, flagText);
+
   const valueRow = new TableRow({
     children: [
       new TableCell({
@@ -490,9 +650,7 @@ function buildResultTable(m: FlaggedMarker): Table {
         children: [
           new Paragraph({
             children: [
-              ...(flagText
-                ? [runBold(flagText + "  ", flagColor(m), 22), runPlain(resultLabel)]
-                : [runPlain(resultLabel)]),
+              ...(indicator ? [indicator, runPlain("  " + resultLabel)] : [runPlain(resultLabel)]),
             ],
           }),
         ],
@@ -509,15 +667,18 @@ function buildResultTable(m: FlaggedMarker): Table {
   });
 }
 
-function headerCell(text: string, width: number, shading: { fill: string; type: typeof ShadingType.CLEAR; color: string }, borders: ReturnType<typeof bordersAll>): TableCell {
+function headerCell(
+  text: string,
+  width: number,
+  shading: { fill: string; type: typeof ShadingType.CLEAR; color: string },
+  borders: ReturnType<typeof bordersAll>,
+): TableCell {
   return new TableCell({
     borders,
     width: { size: width, type: WidthType.DXA },
     shading,
     margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: [
-      new Paragraph({ children: [runBold(text, NAVY)] }),
-    ],
+    children: [new Paragraph({ children: [runBold(text, NAVY)] })],
   });
 }
 
@@ -546,7 +707,6 @@ function formatResultValue(m: FlaggedMarker): string {
 function optimalRangeColumnLabel(m: FlaggedMarker): string {
   if (m.flagType === "three_tier_band") return "Band Thresholds";
   if (m.flagType === "categorical") return "Expected";
-  if (m.flagType === "lab_range_only") return "Optimal Range";
   return "Optimal Range";
 }
 
@@ -562,7 +722,6 @@ function formatRange(m: FlaggedMarker, which: "lab" | "optimal"): string {
     return m.referenceRangeRaw || "—";
   }
 
-  // optimal column
   if (m.flagType === "three_tier_band") {
     const bands = rec.interpretationBands ?? [];
     return bands
@@ -573,9 +732,7 @@ function formatRange(m: FlaggedMarker, which: "lab" | "optimal"): string {
       })
       .join("  |  ");
   }
-  if (m.flagType === "categorical") {
-    return rec.expectedValue ?? "—";
-  }
+  if (m.flagType === "categorical") return rec.expectedValue ?? "—";
   const { min, max } = rec.optimalRange;
   if (min !== null && max !== null) return `${min}–${max}`;
   if (min !== null) return `≥ ${min}`;
@@ -596,11 +753,24 @@ function formatFlagIndicator(m: FlaggedMarker): string | null {
   }
 }
 
-function flagColor(m: FlaggedMarker): string {
-  // Optimal in muted navy; everything else in teal (the accent color).
-  if (m.flagStatus === "optimal") return NAVY;
-  if (m.flagStatus === "informational") return GREY;
-  return TEAL;
+/** Build the colored/styled TextRun for the flag indicator per item 8. */
+function formatFlagIndicatorStyling(m: FlaggedMarker, text: string | null): TextRun | null {
+  if (!text) return null;
+  switch (m.flagStatus) {
+    case "high":
+    case "low":
+    case "out_of_range":
+      return new TextRun({ text, bold: true, color: NAVY, size: 22, font: "Arial" });
+    case "moderate":
+    case "optimal":
+      return new TextRun({ text, bold: true, color: TEAL, size: 22, font: "Arial" });
+    case "informational":
+      return new TextRun({ text, color: GREY, size: 22, font: "Arial" });
+    case "not_flaggable":
+      return new TextRun({ text, color: GREY, size: 22, font: "Arial" });
+    default:
+      return new TextRun({ text, color: GREY, size: 22, font: "Arial" });
+  }
 }
 
 // ----- Primitive run / paragraph builders -----

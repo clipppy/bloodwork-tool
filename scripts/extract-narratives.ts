@@ -7,13 +7,23 @@
  *
  * Re-runnable. Re-runs overwrite the generated file. The output is then
  * checked in so callers don't need to re-extract at runtime.
+ *
+ * Implementation: reads the .docx as raw XML (not flattened text) so we
+ * preserve paragraph-level bullet metadata. That lets us distinguish
+ * "this paragraph is a bullet item in the source" from "this paragraph is
+ * a prose sentence in the source," which matters for cardio-IQ markers
+ * where Melissa uses bullets to enumerate treatment-plan observations.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import mammoth from "mammoth";
+import * as zlib from "node:zlib";
 import { OPTIMAL_RANGES } from "../lib/ranges/optimal-ranges";
-import type { MarkerNarrative, GroupNarrative } from "../lib/narratives/types";
+import type {
+  MarkerNarrative,
+  GroupNarrative,
+  AdditionalProseBlock,
+} from "../lib/narratives/types";
 
 const TEMPLATE_PATH = path.resolve(
   __dirname,
@@ -24,32 +34,28 @@ const OUTPUT_PATH = path.resolve(
   "../lib/narratives/marker-narratives.ts",
 );
 
+// ----- Raw paragraph type carried by the extractor -----
+
+interface RawPara {
+  text: string;
+  /** true when the source paragraph has `<w:numPr>` (i.e. it's a bullet or
+   *  numbered-list item). */
+  isBullet: boolean;
+}
+
 // ----- Marker anchor table -----
 // Maps the exact text that appears as a marker header in the eval form to the
 // canonicalName from OPTIMAL_RANGES. The extractor finds these as anchor
 // lines, then captures content between them.
-//
-// Some markers have sub-rows under a parent name (T3 Free / Total, hormones,
-// Cardio IQ). For those we anchor on the parent and let the per-marker
-// renderer share the captured block.
 
 interface Anchor {
-  /** Exact line text (stripped) that triggers a new block. */
   matchText: string;
-  /** OPTIMAL_RANGES canonicalName to attribute the block to. */
   canonicalName: string;
-  /** Optional grouping — when set, the block is added under GroupNarrative
-   *  with the given groupName instead of (or in addition to) a per-marker
-   *  entry. */
   groupName?: string;
-  /** Some anchors share a single block with siblings. The first sibling
-   *  acts as the "owner" of the captured narrative; the rest just inherit
-   *  the description via groupName cross-reference. */
-  inheritFromGroup?: boolean;
 }
 
 const ANCHORS: Anchor[] = [
-  // ----- Overall Blood Health -----
+  // CBC
   { matchText: "RBC (Red Blood Cell)", canonicalName: "RBC (Red Blood Cell)" },
   { matchText: "Hemoglobin", canonicalName: "Hemoglobin" },
   { matchText: "Hematocrit", canonicalName: "Hematocrit" },
@@ -59,41 +65,29 @@ const ANCHORS: Anchor[] = [
   { matchText: "RDW (Red Cell Distribution Width)", canonicalName: "RDW (Red Cell Distribution Width)" },
   { matchText: "Platelets", canonicalName: "Platelets" },
   { matchText: "MPV (Mean Platelet Volume)", canonicalName: "MPV (Mean Platelet Volume)" },
-
-  // ----- Immune Status -----
+  // WBC differential
   { matchText: "WBC (White Blood Cell)", canonicalName: "WBC (White Blood Cell)" },
   { matchText: "Neutrophils", canonicalName: "Neutrophils" },
   { matchText: "Lymphocytes", canonicalName: "Lymphocytes" },
   { matchText: "Monocytes", canonicalName: "Monocytes" },
   { matchText: "Eosinophils", canonicalName: "Eosinophils" },
   { matchText: "Basophils", canonicalName: "Basophils" },
-
-  // ----- EBV panel — shared narrative; we treat the group header as the
-  //       anchor and assign the captured description to all 4 markers. -----
+  // EBV — shared block
   { matchText: "Epstein-Barr", canonicalName: "EBV Early Antigen IgG", groupName: "Epstein-Barr" },
-
-  // ----- Vitamin D -----
+  // Vitamin D / ANA
   { matchText: "Vitamin D 25-OH", canonicalName: "Vitamin D 25-OH" },
-
-  // ----- ANA — Result-only template row, no narrative -----
   { matchText: "ANA (Anti-nuclear Antibodies)", canonicalName: "ANA (Anti-nuclear Antibodies)" },
-
-  // ----- Thyroid -----
+  // Thyroid
   { matchText: "sTSH (Serum Thyroid Stimulating Hormone)", canonicalName: "sTSH (Serum Thyroid Stimulating Hormone)" },
-  // T4 and T3 share a block in the eval form ("Serum Thyroxine (T4) Free and Total" has
-  // a paragraph + combined Increase/Decrease). We anchor on the parent for T4 Total
-  // (the primary), and copy to T4 Free post-extraction.
   { matchText: "Serum Thyroxine (T4) Free and Total", canonicalName: "T4 Total", groupName: "T4" },
   { matchText: "Triiodothryonine (T3) Free and Total", canonicalName: "T3 Total", groupName: "T3" },
   { matchText: "Thyroid Peroxidase", canonicalName: "Thyroid Peroxidase" },
   { matchText: "Thyroglobulin Antibodies", canonicalName: "Thyroglobulin Antibodies" },
-
-  // ----- Kidney -----
+  // Kidney
   { matchText: "BUN (Blood Urea Nitrogen)", canonicalName: "BUN (Blood Urea Nitrogen)" },
   { matchText: "Creatinine", canonicalName: "Creatinine" },
   { matchText: "BUN/Creatinine Ratio", canonicalName: "BUN/Creatinine Ratio" },
-
-  // ----- Liver -----
+  // Liver
   { matchText: "AST (Aspartate Aminotransferase)", canonicalName: "AST (Aspartate Aminotransferase)" },
   { matchText: "ALT (Alanine Aminotransferase)", canonicalName: "ALT (Alanine Aminotransferase)" },
   { matchText: "Alkaline Phosphatase", canonicalName: "Alkaline Phosphatase" },
@@ -103,23 +97,19 @@ const ANCHORS: Anchor[] = [
   { matchText: "A/G Ratio", canonicalName: "A/G Ratio" },
   { matchText: "Globulin", canonicalName: "Globulin" },
   { matchText: "GGT (Gamma-Glutamyl Transpeptidase)", canonicalName: "GGT (Gamma-Glutamyl Transpeptidase)" },
-
-  // ----- Cholesterol -----
+  // Lipids
   { matchText: "Cholesterol", canonicalName: "Cholesterol" },
   { matchText: "LDL (Low Density Lipoprotein Cholesterol)", canonicalName: "LDL (Low Density Lipoprotein Cholesterol)" },
   { matchText: "Triglycerides", canonicalName: "Triglycerides" },
   { matchText: "HDL (High Density Lipoprotein)", canonicalName: "HDL (High Density Lipoprotein)" },
-
-  // ----- Blood sugar -----
+  // Blood sugar
   { matchText: "Hemoglobin A1C", canonicalName: "Hemoglobin A1C" },
   { matchText: "Glucose", canonicalName: "Glucose" },
   { matchText: "Insulin", canonicalName: "Insulin" },
-
-  // ----- Inflammation -----
+  // Inflammation
   { matchText: "Hs-CRP", canonicalName: "Hs-CRP" },
   { matchText: "LDH (Lactate-Dehydrogenase)", canonicalName: "LDH (Lactate-Dehydrogenase)" },
-
-  // ----- Electrolytes / minerals -----
+  // Electrolytes / minerals
   { matchText: "Calcium", canonicalName: "Calcium" },
   { matchText: "Sodium", canonicalName: "Sodium" },
   { matchText: "Potassium", canonicalName: "Potassium" },
@@ -132,30 +122,23 @@ const ANCHORS: Anchor[] = [
   { matchText: "Methylmalonic Acid (MMA)", canonicalName: "Methylmalonic Acid" },
   { matchText: "Uric Acid", canonicalName: "Uric Acid" },
   { matchText: "MTHFR Mutation", canonicalName: "MTHFR" },
-
-  // ----- Iron -----
+  // Iron
   { matchText: "Iron", canonicalName: "Iron" },
   { matchText: "Ferritin", canonicalName: "Ferritin" },
   { matchText: "% Iron Saturation", canonicalName: "% Iron Saturation" },
   { matchText: "TIBC (Total Iron Binding Capacity)", canonicalName: "TIBC (Total Iron Binding Capacity)" },
-
-  // ----- Gut / digestion (Food Sensitivities is a group, no per-marker prose) -----
+  // Gut / digestion
   { matchText: "Vitamin B6", canonicalName: "Vitamin B6" },
   { matchText: "Candida Albicans", canonicalName: "Candida Albicans" },
-
-  // ----- Misc tests -----
+  // Misc
   { matchText: "Rheumatoid Factor", canonicalName: "Rheumatoid Factor" },
   { matchText: "Lead", canonicalName: "Lead Venous" },
   { matchText: "Mercury", canonicalName: "Mercury Blood" },
   { matchText: "Leptin", canonicalName: "Leptin" },
   { matchText: "Amylase:", canonicalName: "Amylase" },
   { matchText: "Lipase:", canonicalName: "Lipase" },
-  // Cortisol: appears twice in eval form (Blood+Saliva block and a later
-  // standalone). We anchor the FIRST occurrence; the second is identical
-  // template data with no new prose, so we skip it.
   { matchText: "Cortisol", canonicalName: "Cortisol" },
-
-  // ----- Cardio IQ Tests (rich per-marker prose) -----
+  // Cardio IQ
   { matchText: "LDL Particle", canonicalName: "LDL Particle" },
   { matchText: "LDL Small", canonicalName: "LDL Small" },
   { matchText: "LDL Medium", canonicalName: "LDL Medium" },
@@ -168,181 +151,322 @@ const ANCHORS: Anchor[] = [
   { matchText: "(L) Omega Check", canonicalName: "Omega Check" },
 ];
 
-// Lines we treat as stop markers — end of PART I.
 const STOP_TEXT = "PART II: Summary of Results";
 
-// Result-line pattern: skip these when capturing description / bullets.
-const RESULT_LINE_RE = /^\s*(?:[A-Za-z()%/ -]+?:\s*)?\(?(?:[HLN])?\)?\s*Result\b/i;
-
-// Group-section headings we ignore as anchors but recognize as boundaries.
+// Group-section headings we treat as boundaries (end the current block).
 const GROUP_HEADINGS = new Set<string>([
-  "Overall Blood Health",
-  "Immune Status",
-  " Thyroid", // leading space in source
-  "Thyroid",
-  "Kidney",
-  "Liver & Gall Bladder",
-  "Cholesterol, Heart & Vascular Health",
-  "Blood Sugar Metabolism",
-  "Systemic Inflammatory Markers",
-  "Vitamins, Minerals, & Electrolytes",
-  "Iron Status",
-  "Gut & Digestive Health",
-  "Food Sensitivities",
-  "Miscellaneous Tests",
-  "Hormones",
-  "Estrogens & Female:",
-  "Testosterones and PSA:",
-  "Cardio IQ Tests",
-  "Cardio IQ Tests ",
+  "Overall Blood Health", "Immune Status",
+  "Thyroid", " Thyroid",
+  "Kidney", "Liver & Gall Bladder",
+  "Cholesterol, Heart & Vascular Health", "Blood Sugar Metabolism",
+  "Systemic Inflammatory Markers", "Vitamins, Minerals, & Electrolytes",
+  "Iron Status", "Gut & Digestive Health", "Food Sensitivities",
+  "Miscellaneous Tests", "Hormones", "Estrogens & Female:",
+  "Testosterones and PSA:", "Cardio IQ Tests", "Cardio IQ Tests ",
   "PART 1: Lab Values and Data Analysis",
 ]);
 
-// Cycle-phase hormone sub-rows that have unambiguous label tokens. We
-// recognize these as boundary markers so the previous block ends cleanly,
-// but they don't get their own narrative (the group header carries it).
-// "Total:" and "Free:" are deliberately EXCLUDED — they also appear inside
-// T4/T3 blocks ("Free:  Result: ..." / "Total: Result: ...") and would
-// otherwise kill the description capture. Hormone Total/Free sub-rows are
-// already kept out by the group-heading boundary that precedes them.
+// Hormone sub-row labels — unambiguous tokens only (Total/Free excluded
+// because they also appear inside T4/T3 blocks).
 const HORMONE_SUBROW_RE = /^(Estrone|Estradiol|Estriol|Progesterone|FSH|LH|Prolactin|Pregnenolone|Bioavailable|SHBG|DHEAs|PSA%|PSA Total|PSA Free):\s*Result/;
 
-function isAnchorLine(line: string): Anchor | null {
-  const trimmed = line.trim();
+// Result-line patterns — any of these mark a template row that should NOT
+// land in the description / bullets. Includes the time-band saliva rows
+// from the Cortisol section, where the XML extractor drops the inter-tab
+// whitespace so we end up with strings like "8-10AMResult:Lab Range ...".
+const RESULT_LINE_PATTERNS: RegExp[] = [
+  /^\s*(?:[A-Za-z()%/ -]+?:\s*)?\(?(?:[HLN])?\)?\s*Result\b/i,
+  // Time-band Result rows: "8-10AMResult", "12-2PMResult", "10PM-1AMResult"
+  /^\s*\d+\s*(?:AM|PM)?\s*[-–]\s*\d+\s*(?:AM|PM)\s*Result/i,
+];
+
+// Inline headings within a marker section that should also be skipped
+// (they're labels for sub-rows, not narrative content). Cortisol's
+// "Blood 8-10AM:" / "Saliva:" sub-section labels are the only current case.
+const SKIP_INLINE = new Set<string>([
+  "Blood 8-10AM:",
+  "Saliva:",
+]);
+
+const INCREASE_HEADINGS = new Set<string>([
+  "Increase:", "Increased:", "Increase", "Increased",
+  "Increased Direct:", "Increased Indirect:",
+]);
+const DECREASE_HEADINGS = new Set<string>([
+  "Decrease:", "Decreased:", "Decrease", "Decreased",
+]);
+// Special markers within a block that switch us into additionalProse mode.
+const ADDITIONAL_INTROS = new Set<string>([
+  "Educational Information only:",
+  "Recommended Treatment for MTHFR Mutation:",
+  "High ApoB means:",
+]);
+
+// ----- XML reader -----
+
+function readDocxParagraphs(filePath: string): RawPara[] {
+  // .docx is a ZIP archive; we only need word/document.xml.
+  const buf = fs.readFileSync(filePath);
+  const xml = extractDocumentXml(buf);
+  return parseParagraphs(xml);
+}
+
+// Lightweight ZIP central-directory walker. We only support uncompressed
+// (stored) and DEFLATE entries — both standard in .docx files.
+function extractDocumentXml(zipBuf: Buffer): string {
+  const eocdSig = 0x06054b50;
+  // Find EOCD
+  let eocdOffset = -1;
+  for (let i = zipBuf.length - 22; i >= 0; i--) {
+    if (zipBuf.readUInt32LE(i) === eocdSig) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset < 0) throw new Error("Could not find ZIP EOCD record");
+  const cdSize = zipBuf.readUInt32LE(eocdOffset + 12);
+  const cdOffset = zipBuf.readUInt32LE(eocdOffset + 16);
+
+  let p = cdOffset;
+  while (p < cdOffset + cdSize) {
+    if (zipBuf.readUInt32LE(p) !== 0x02014b50) throw new Error("Bad CD entry");
+    const compressionMethod = zipBuf.readUInt16LE(p + 10);
+    const compSize = zipBuf.readUInt32LE(p + 20);
+    const uncompSize = zipBuf.readUInt32LE(p + 24);
+    const nameLen = zipBuf.readUInt16LE(p + 28);
+    const extraLen = zipBuf.readUInt16LE(p + 30);
+    const commentLen = zipBuf.readUInt16LE(p + 32);
+    const localHeaderOffset = zipBuf.readUInt32LE(p + 42);
+    const name = zipBuf.slice(p + 46, p + 46 + nameLen).toString("utf8");
+    p += 46 + nameLen + extraLen + commentLen;
+
+    if (name === "word/document.xml") {
+      // Skip the local file header
+      const lhNameLen = zipBuf.readUInt16LE(localHeaderOffset + 26);
+      const lhExtraLen = zipBuf.readUInt16LE(localHeaderOffset + 28);
+      const dataStart = localHeaderOffset + 30 + lhNameLen + lhExtraLen;
+      const data = zipBuf.slice(dataStart, dataStart + compSize);
+      if (compressionMethod === 0) return data.toString("utf8");
+      if (compressionMethod === 8) {
+        const inflated = zlib.inflateRawSync(data, { maxOutputLength: uncompSize * 4 });
+        return inflated.toString("utf8");
+      }
+      throw new Error(`Unsupported compression method ${compressionMethod}`);
+    }
+  }
+  throw new Error("word/document.xml not found in archive");
+}
+
+function parseParagraphs(xml: string): RawPara[] {
+  const out: RawPara[] = [];
+  // Capture each <w:p ...>...</w:p>
+  const re = /<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const inner = m[1];
+    // Concatenate all <w:t...>...</w:t>
+    // CRITICAL: `<w:t[^>]*>` would also match `<w:tab/>` and `<w:tr>` since
+    // there's no word boundary after `<w:t`. Require either `>` immediately
+    // or `>` after a whitespace-delimited attribute list.
+    const textRe = /<w:t(?:>|\s[^>]*>)([\s\S]*?)<\/w:t>/g;
+    let textM: RegExpExecArray | null;
+    const parts: string[] = [];
+    while ((textM = textRe.exec(inner)) !== null) {
+      parts.push(decodeXmlEntities(textM[1]));
+    }
+    const text = parts.join("").trim();
+    const isBullet = /<w:numPr\b/.test(inner);
+    out.push({ text, isBullet });
+  }
+  return out;
+}
+
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
+// ----- Block segmentation -----
+
+function isAnchorPara(p: RawPara): Anchor | null {
   for (const a of ANCHORS) {
-    if (trimmed === a.matchText) return a;
+    if (p.text === a.matchText) return a;
   }
   return null;
 }
 
-function isBoundaryLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (GROUP_HEADINGS.has(line) || GROUP_HEADINGS.has(trimmed)) return true;
-  if (HORMONE_SUBROW_RE.test(trimmed)) return true;
+function isBoundary(p: RawPara): boolean {
+  if (GROUP_HEADINGS.has(p.text)) return true;
+  if (HORMONE_SUBROW_RE.test(p.text)) return true;
   return false;
+}
+
+function isResultLine(text: string): boolean {
+  return RESULT_LINE_PATTERNS.some((re) => re.test(text));
 }
 
 interface RawBlock {
   anchor: Anchor;
-  lines: string[];
+  paras: RawPara[];
 }
 
-function splitBlocks(text: string): RawBlock[] {
-  const lines = text.split(/\r?\n/);
+function splitBlocks(paras: RawPara[]): RawBlock[] {
   const blocks: RawBlock[] = [];
   let current: RawBlock | null = null;
-
-  for (const rawLine of lines) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-
-    if (trimmed === STOP_TEXT) break;
-
-    const anchor = isAnchorLine(rawLine);
+  for (const para of paras) {
+    if (!para.text) continue;
+    if (para.text === STOP_TEXT) break;
+    const anchor = isAnchorPara(para);
     if (anchor) {
-      // Skip the second Cortisol occurrence — same canonicalName already
-      // captured. The check is "is there already a block for this canonical
-      // name AND this anchor.matchText is the same as the previous match".
+      // De-dup: second Cortisol entry collapses into the first.
       const dup = blocks.find((b) => b.anchor.canonicalName === anchor.canonicalName);
-      if (dup) {
-        current = null; // skip this block
-        continue;
-      }
-      current = { anchor, lines: [] };
+      if (dup) { current = null; continue; }
+      current = { anchor, paras: [] };
       blocks.push(current);
       continue;
     }
-
-    if (isBoundaryLine(rawLine)) {
-      current = null;
-      continue;
-    }
-
-    if (current) current.lines.push(trimmed);
+    if (isBoundary(para)) { current = null; continue; }
+    if (current) current.paras.push(para);
   }
-
   return blocks;
 }
 
-// Bullet-style headings that switch the parser into bullet mode.
-const INCREASE_HEADINGS = new Set<string>([
-  "Increase:",
-  "Increased:",
-  "Increase",
-  "Increased",
-  "Increased Direct:",
-  "Increased Indirect:",
-]);
-const DECREASE_HEADINGS = new Set<string>([
-  "Decrease:",
-  "Decreased:",
-  "Decrease",
-  "Decreased",
-]);
-const SKIP_INLINE_HEADINGS = new Set<string>([
-  "T3 and T4:",
-  "Educational Information only:",
-  "Recommended Treatment for MTHFR Mutation:",
-]);
+// ----- Classification -----
+
+type Mode = "desc" | "inc" | "dec" | "additional";
 
 function classifyBlock(block: RawBlock): MarkerNarrative {
-  const descLines: string[] = [];
-  const incLines: string[] = [];
-  const decLines: string[] = [];
-  const additionalLines: string[] = [];
+  const descParas: RawPara[] = [];
+  const incParas: RawPara[] = [];
+  const decParas: RawPara[] = [];
+  // We collect additional sections as a sequence of (intro?, bullets[]) groups
+  // built up as we walk the trailing portion of the block. A new group starts
+  // every time we hit a non-bullet paragraph (which becomes its intro) or
+  // when we transition from bullets back to prose (the prose becomes the
+  // current group's outro and seals it).
+  const additionalGroups: AdditionalProseBlock[] = [];
+  let curGroup: AdditionalProseBlock | null = null;
 
-  type Mode = "desc" | "inc" | "dec" | "additional";
   let mode: Mode = "desc";
-  // Once we've left the increase/decrease block AND seen non-bullet prose,
-  // anything further is additionalProse.
-  let sawAdditionalTrigger = false;
 
-  for (const line of block.lines) {
-    if (RESULT_LINE_RE.test(line)) continue; // Result row — skip
-    if (INCREASE_HEADINGS.has(line)) {
-      mode = "inc";
-      continue;
-    }
-    if (DECREASE_HEADINGS.has(line)) {
-      mode = "dec";
-      continue;
-    }
-    if (SKIP_INLINE_HEADINGS.has(line)) {
-      // For MTHFR: the rest of the block is additional educational/treatment
-      // prose, not bullets.
+  for (const para of block.paras) {
+    if (isResultLine(para.text)) continue;
+    if (SKIP_INLINE.has(para.text)) continue;
+    if (INCREASE_HEADINGS.has(para.text)) { mode = "inc"; continue; }
+    if (DECREASE_HEADINGS.has(para.text)) { mode = "dec"; continue; }
+    if (ADDITIONAL_INTROS.has(para.text)) {
+      // Force a new additional-prose group with this line as intro.
+      if (curGroup) additionalGroups.push(curGroup);
+      curGroup = { intro: para.text };
       mode = "additional";
-      sawAdditionalTrigger = true;
-      additionalLines.push(line);
       continue;
     }
-
     if (mode === "desc") {
-      descLines.push(line);
+      // If the source paragraph is a bullet AND it sits inside the
+      // description region (no Increase/Decrease seen yet), it's likely a
+      // post-description observation list — graduate to additional-prose
+      // mode so the bullets are preserved as structure.
+      if (para.isBullet) {
+        if (descParas.length > 0) {
+          // Description ended; bullets begin → start an additional group
+          // with the prior description as intro... no wait, description
+          // already lives in descParas. We just start a new group with no
+          // intro and start collecting bullets.
+        }
+        if (!curGroup) curGroup = {};
+        if (!curGroup.bullets) curGroup.bullets = [];
+        curGroup.bullets.push(para.text);
+        mode = "additional";
+      } else {
+        descParas.push(para);
+      }
       continue;
     }
-    if (mode === "inc" || mode === "dec") {
-      // Heuristic: lines that look like long prose paragraphs (long sentences,
-      // colons, parenthesized sub-clauses) AFTER increase/decrease bullets
-      // often signal additional commentary. We keep them as bullets unless
-      // we've already moved into "additional" mode.
-      const dest = mode === "inc" ? incLines : decLines;
-      dest.push(line);
+    if (mode === "inc") {
+      incParas.push(para);
       continue;
     }
-    additionalLines.push(line);
+    if (mode === "dec") {
+      decParas.push(para);
+      continue;
+    }
+    // mode === "additional"
+    if (!curGroup) curGroup = {};
+    if (para.isBullet) {
+      if (!curGroup.bullets) curGroup.bullets = [];
+      curGroup.bullets.push(para.text);
+    } else if (!curGroup.bullets) {
+      // Still in the intro phase (no bullets yet)
+      curGroup.intro = curGroup.intro ? `${curGroup.intro}\n${para.text}` : para.text;
+    } else {
+      // Bullets already exist; subsequent prose closes this group as outro,
+      // then we open a fresh group for whatever follows.
+      curGroup.outro = curGroup.outro ? `${curGroup.outro}\n${para.text}` : para.text;
+    }
   }
+  if (curGroup) additionalGroups.push(curGroup);
+
+  const description = descParas.map((p) => p.text).join("\n").trim();
+  const increaseCauses = incParas.map((p) => p.text);
+  const decreaseCauses = decParas.map((p) => p.text);
+  const additionalProse = collapseAdditional(additionalGroups);
 
   return {
     canonicalName: block.anchor.canonicalName,
-    description: descLines.join("\n").trim(),
-    increaseCauses: incLines,
-    decreaseCauses: decLines,
-    additionalProse: additionalLines.length > 0 ? additionalLines.join("\n").trim() : null,
+    description,
+    increaseCauses,
+    decreaseCauses,
+    additionalProse,
   };
 }
 
-function escapeForLiteral(s: string): string {
+function collapseAdditional(
+  groups: AdditionalProseBlock[],
+): MarkerNarrative["additionalProse"] {
+  // Drop completely empty groups.
+  const cleaned = groups.filter(
+    (g) =>
+      (g.intro && g.intro.trim()) ||
+      (g.bullets && g.bullets.length > 0) ||
+      (g.outro && g.outro.trim()),
+  );
+  if (cleaned.length === 0) return null;
+  if (cleaned.length === 1) return cleaned[0];
+  return cleaned;
+}
+
+// ----- Serialization -----
+
+function escTpl(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
+}
+
+function emitAdditional(prose: MarkerNarrative["additionalProse"]): string {
+  if (prose === null) return "null";
+  if (typeof prose === "string") return `\`${escTpl(prose)}\``;
+  const fmtBlock = (b: AdditionalProseBlock): string => {
+    const parts: string[] = ["{"];
+    if (b.intro) parts.push(`        intro: \`${escTpl(b.intro)}\`,`);
+    if (b.bullets && b.bullets.length > 0) {
+      parts.push("        bullets: [");
+      for (const it of b.bullets) parts.push(`          \`${escTpl(it)}\`,`);
+      parts.push("        ],");
+    }
+    if (b.outro) parts.push(`        outro: \`${escTpl(b.outro)}\`,`);
+    parts.push("      }");
+    return parts.join("\n");
+  };
+  if (Array.isArray(prose)) {
+    const blocks = prose.map(fmtBlock).join(",\n      ");
+    return `[\n      ${blocks},\n    ]`;
+  }
+  return fmtBlock(prose);
 }
 
 function serialize(
@@ -360,14 +484,12 @@ function serialize(
     const n = narratives[key];
     lines.push(`  ${JSON.stringify(key)}: {`);
     lines.push(`    canonicalName: ${JSON.stringify(n.canonicalName)},`);
-    lines.push(`    description: \`${escapeForLiteral(n.description)}\`,`);
-    lines.push(`    increaseCauses: ${JSON.stringify(n.increaseCauses, null, 6).replace(/\n/g, "\n    ")},`);
-    lines.push(`    decreaseCauses: ${JSON.stringify(n.decreaseCauses, null, 6).replace(/\n/g, "\n    ")},`);
-    if (n.additionalProse) {
-      lines.push(`    additionalProse: \`${escapeForLiteral(n.additionalProse)}\`,`);
-    } else {
-      lines.push(`    additionalProse: null,`);
-    }
+    lines.push(`    description: \`${escTpl(n.description)}\`,`);
+    const inc = JSON.stringify(n.increaseCauses, null, 6).replace(/\n/g, "\n    ");
+    const dec = JSON.stringify(n.decreaseCauses, null, 6).replace(/\n/g, "\n    ");
+    lines.push(`    increaseCauses: ${inc},`);
+    lines.push(`    decreaseCauses: ${dec},`);
+    lines.push(`    additionalProse: ${emitAdditional(n.additionalProse)},`);
     lines.push("  },");
   }
   lines.push("};");
@@ -377,12 +499,8 @@ function serialize(
     lines.push("  {");
     lines.push(`    groupName: ${JSON.stringify(g.groupName)},`);
     lines.push(`    members: ${JSON.stringify(g.members)},`);
-    lines.push(`    description: \`${escapeForLiteral(g.description)}\`,`);
-    if (g.additionalProse) {
-      lines.push(`    additionalProse: \`${escapeForLiteral(g.additionalProse)}\`,`);
-    } else {
-      lines.push(`    additionalProse: null,`);
-    }
+    lines.push(`    description: \`${escTpl(g.description)}\`,`);
+    lines.push(`    additionalProse: ${g.additionalProse ? "`" + escTpl(g.additionalProse) + "`" : "null"},`);
     lines.push("  },");
   }
   lines.push("];");
@@ -390,16 +508,12 @@ function serialize(
   return lines.join("\n");
 }
 
+// ----- Main -----
+
 async function main() {
-  const buf = fs.readFileSync(TEMPLATE_PATH);
-  const result = await mammoth.extractRawText({ buffer: buf });
-  const text = result.value;
+  const paras = readDocxParagraphs(TEMPLATE_PATH);
+  const blocks = splitBlocks(paras);
 
-  const blocks = splitBlocks(text);
-
-  // Classify each block. Some are group-owned (T4, T3, EBV, Cardio IQ Hs-CRP)
-  // — those become both a per-marker entry on the owning canonicalName AND a
-  // group entry (so renderer can use whichever is more appropriate).
   const narratives: Record<string, MarkerNarrative> = {};
   const groups: GroupNarrative[] = [];
 
@@ -408,40 +522,25 @@ async function main() {
     narratives[n.canonicalName] = n;
 
     if (b.anchor.groupName) {
-      // Build a group entry. Group members = the anchor's owner + known
-      // siblings. We populate siblings explicitly per group.
       const members: string[] = [];
       switch (b.anchor.groupName) {
-        case "T4":
-          members.push("T4 Total", "T4 Free");
-          break;
-        case "T3":
-          members.push("T3 Total", "T3 Free");
-          break;
+        case "T4": members.push("T4 Total", "T4 Free"); break;
+        case "T3": members.push("T3 Total", "T3 Free"); break;
         case "Epstein-Barr":
-          members.push(
-            "EBV Early Antigen IgG",
-            "EBV Viral Capsid IgM",
-            "EBV Viral Capsid IgG",
-            "EBV Nuclear AG IgG",
-          );
+          members.push("EBV Early Antigen IgG", "EBV Viral Capsid IgM", "EBV Viral Capsid IgG", "EBV Nuclear AG IgG");
           break;
-        case "Hs-CRP Cardio IQ":
-          members.push("Hs-CRP");
-          break;
-        default:
-          members.push(b.anchor.canonicalName);
+        case "Hs-CRP Cardio IQ": members.push("Hs-CRP"); break;
+        default: members.push(b.anchor.canonicalName);
       }
       groups.push({
         groupName: b.anchor.groupName,
         members,
         description: n.description,
-        additionalProse: n.additionalProse,
+        additionalProse:
+          typeof n.additionalProse === "string"
+            ? n.additionalProse
+            : null,
       });
-
-      // Copy the captured narrative onto sibling members (T4 Free, T3 Free,
-      // and the 3 sibling EBV markers) so the renderer doesn't have to
-      // cross-reference groups for the common case.
       for (const sibling of members) {
         if (sibling === n.canonicalName) continue;
         if (!narratives[sibling]) {
@@ -457,9 +556,7 @@ async function main() {
     }
   }
 
-  // Backfill empty MarkerNarrative entries for every OPTIMAL_RANGES marker
-  // that the eval form didn't cover. The Word generator renders these with
-  // result + range only and a "[Clinical interpretation pending]" placeholder.
+  // Backfill empty narrative for OPTIMAL_RANGES markers the eval form didn't cover.
   const allCanonical = Object.values(OPTIMAL_RANGES).map((r) => r.canonicalName);
   let backfilled = 0;
   for (const c of allCanonical) {
@@ -484,28 +581,22 @@ async function main() {
   const withCauses = allCanonical.filter(
     (c) => (narratives[c]?.increaseCauses?.length ?? 0) + (narratives[c]?.decreaseCauses?.length ?? 0) > 0,
   ).length;
-  const withAdditional = allCanonical.filter((c) => narratives[c]?.additionalProse).length;
-  const fullyEmpty = backfilled;
+  const withAdditional = allCanonical.filter((c) => narratives[c]?.additionalProse !== null).length;
+  const withStructuredBullets = allCanonical.filter((c) => {
+    const ap = narratives[c]?.additionalProse;
+    if (!ap || typeof ap === "string") return false;
+    const blocks = Array.isArray(ap) ? ap : [ap];
+    return blocks.some((b) => b.bullets && b.bullets.length > 0);
+  }).length;
 
   console.log("=== Narrative coverage ===");
-  console.log(`Total markers in OPTIMAL_RANGES:       ${total}`);
-  console.log(`With description:                      ${withDesc}`);
-  console.log(`With increase/decrease bullets:        ${withCauses}`);
-  console.log(`With additionalProse:                  ${withAdditional}`);
-  console.log(`Empty (no eval-form content, backfill): ${fullyEmpty}`);
-  console.log(`Group narratives written:              ${groups.length}`);
-  console.log("");
-  console.log("=== Markers WITHOUT eval-form narrative (backfilled empty) ===");
-  for (const c of allCanonical) {
-    if (
-      (narratives[c]?.description ?? "").length === 0 &&
-      (narratives[c]?.increaseCauses?.length ?? 0) === 0 &&
-      (narratives[c]?.decreaseCauses?.length ?? 0) === 0 &&
-      !narratives[c]?.additionalProse
-    ) {
-      console.log(`  • ${c}`);
-    }
-  }
+  console.log(`Total markers in OPTIMAL_RANGES:           ${total}`);
+  console.log(`With description:                          ${withDesc}`);
+  console.log(`With increase/decrease bullets:            ${withCauses}`);
+  console.log(`With additionalProse (any form):           ${withAdditional}`);
+  console.log(`With structured additionalProse bullets:   ${withStructuredBullets}`);
+  console.log(`Empty (no eval-form content, backfilled):  ${backfilled}`);
+  console.log(`Group narratives written:                  ${groups.length}`);
   console.log("");
   console.log(`Wrote ${OUTPUT_PATH}`);
 }

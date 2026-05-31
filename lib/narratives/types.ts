@@ -7,6 +7,16 @@
  * the tool only inserts patient results into her structure.
  */
 
+/** A structured section of post-bullets prose. Supports an optional lead-in
+ *  paragraph, a bulleted list, and an optional closing paragraph. Used for
+ *  the 5 cardio-IQ / MTHFR markers where the eval form mixes prose with
+ *  bullet items. */
+export interface AdditionalProseBlock {
+  intro?: string;
+  bullets?: string[];
+  outro?: string;
+}
+
 export interface MarkerNarrative {
   /** Display name as it appears in the eval-form template (may differ from
    *  the OPTIMAL_RANGES canonicalName — e.g. "Apoliopoprotein B" vs
@@ -20,8 +30,17 @@ export interface MarkerNarrative {
   /** Bulleted causes of a low result. */
   decreaseCauses: string[];
   /** Free-form prose that goes AFTER the bullets (treatment plans, extended
-   *  commentary). Null when none was present. */
-  additionalProse: string | null;
+   *  commentary). Supports three shapes:
+   *    - string: rendered as paragraphs (legacy / simple cases)
+   *    - AdditionalProseBlock: one intro/bullets/outro group
+   *    - AdditionalProseBlock[]: multiple groups (e.g. MTHFR's
+   *      Educational + Recommended Treatment sections)
+   *    - null: no post-bullet prose present. */
+  additionalProse:
+    | string
+    | AdditionalProseBlock
+    | AdditionalProseBlock[]
+    | null;
 }
 
 /** Group-level narrative when the eval form treats a panel as one section
