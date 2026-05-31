@@ -92,6 +92,122 @@ export function dedupMarkers(markers: ParsedMarker[]): {
   return { deduped, removed, divergentNames };
 }
 
+// ----- ANA multi-row synthesis -----
+//
+// Quest reports ANA across up to three separate rows:
+//   ANA SCREEN, IFA   POSITIVE|NEGATIVE|EQUIVOCAL
+//   ANA TITER         1:40 (or 1:80, 1:160, 1:320, 1:640, 1:1280, ...)
+//   ANA PATTERN       Nuclear, Speckled (or Homogeneous, Centromere, ...)
+//
+// None of those raw names match the canonical "ANA (Anti-nuclear Antibodies)"
+// in optimal-ranges.ts on their own, so positive ANA was previously going
+// undetected. This pass collapses them into a single ParsedMarker with
+// rawName "ANA", value carrying the screen result, and titer/pattern fields
+// carrying the sub-row data.
+//
+// Detection: anchor on any row whose rawName starts with "ANA SCREEN" (or
+// "ANA, SCREEN"), then look at up to the next 3 rows ON THE SAME PAGE for
+// "ANA TITER" and "ANA PATTERN" siblings. Whichever sub-rows are present
+// (zero, one, or both) get folded in; missing ones land as null.
+//
+// The parser packs the actual data values into the rawName for these rows
+// (e.g. "ANA SCREEN, IFA POSITIVE" / "ANA TITER 1:40" / "ANA PATTERN Nuclear,
+// Speckled"), so the extraction works off rawName, not value.
+
+interface AnaParts {
+  screenIndex: number;
+  screenResult: string;
+  titerIndex: number | null;
+  titer: string | null;
+  patternIndex: number | null;
+  pattern: string | null;
+}
+
+const ANA_SCREEN_RE = /^ANA[,\s]+SCREEN(?:,?\s+IFA)?\s+(POSITIVE|NEGATIVE|EQUIVOCAL)\b/i;
+const ANA_TITER_RE = /^ANA[,\s]+TITER\s+(.+?)\s*$/i;
+const ANA_PATTERN_RE = /^ANA[,\s]+PATTERN\s+(.+?)\s*$/i;
+
+function findAnaParts(markers: ParsedMarker[], screenIdx: number): AnaParts | null {
+  const screen = markers[screenIdx];
+  const screenMatch = ANA_SCREEN_RE.exec(screen.rawName);
+  if (!screenMatch) return null;
+  const parts: AnaParts = {
+    screenIndex: screenIdx,
+    screenResult: titleCase(screenMatch[1]),
+    titerIndex: null,
+    titer: null,
+    patternIndex: null,
+    pattern: null,
+  };
+  // Look at up to the next 3 rows on the same page.
+  for (let j = screenIdx + 1; j < markers.length && j <= screenIdx + 3; j++) {
+    const m = markers[j];
+    if (m.pageNumber !== screen.pageNumber) break;
+    const tm = ANA_TITER_RE.exec(m.rawName);
+    if (tm && parts.titerIndex === null) {
+      parts.titerIndex = j;
+      parts.titer = tm[1].trim();
+      continue;
+    }
+    const pm = ANA_PATTERN_RE.exec(m.rawName);
+    if (pm && parts.patternIndex === null) {
+      parts.patternIndex = j;
+      parts.pattern = pm[1].trim();
+      continue;
+    }
+  }
+  return parts;
+}
+
+function titleCase(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+/** Collapse ANA SCREEN/TITER/PATTERN row triplets into a single ANA marker.
+ *  Returns a new markers array with the originals removed and the synthesized
+ *  rows appended in their place (preserving page order). */
+export function synthesizeAnaRows(markers: ParsedMarker[]): ParsedMarker[] {
+  const dropIdx = new Set<number>();
+  const synthesized: ParsedMarker[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    if (dropIdx.has(i)) continue;
+    const parts = findAnaParts(markers, i);
+    if (!parts) continue;
+    dropIdx.add(parts.screenIndex);
+    if (parts.titerIndex !== null) dropIdx.add(parts.titerIndex);
+    if (parts.patternIndex !== null) dropIdx.add(parts.patternIndex);
+    const screen = markers[parts.screenIndex];
+    synthesized.push({
+      rawName: "ANA",
+      value: parts.screenResult,
+      unit: null,
+      labFlagFromPdf: null,
+      referenceRangeRaw: "Negative",
+      pageNumber: screen.pageNumber,
+      rawLine: screen.rawLine,
+      titer: parts.titer,
+      pattern: parts.pattern,
+      anaSynthesized: true,
+    });
+  }
+  if (dropIdx.size === 0) return markers;
+  // Preserve original order: keep non-dropped rows, then insert each
+  // synthesized row at the position of its original screen row.
+  const survivors: ParsedMarker[] = [];
+  let synthIdx = 0;
+  for (let i = 0; i < markers.length; i++) {
+    if (dropIdx.has(i)) {
+      if (ANA_SCREEN_RE.test(markers[i].rawName)) {
+        survivors.push(synthesized[synthIdx++]);
+      }
+      continue;
+    }
+    survivors.push(markers[i]);
+  }
+  return survivors;
+}
+
 // ---- Known token sets -----------------------------------------------------
 
 // Quest's lab-site codes — short uppercase tokens that appear at the END of
@@ -1176,8 +1292,12 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
     );
   }
 
+  // Fold Quest's ANA SCREEN/TITER/PATTERN multi-row output into a single
+  // synthesized ANA marker (carries titer + pattern as sibling fields).
+  const final = synthesizeAnaRows(deduped);
+
   return {
-    markers: deduped,
+    markers: final,
     patientMeta: meta,
     unparsedLines,
     parserVersion: PARSER_VERSION,

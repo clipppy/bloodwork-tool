@@ -36,6 +36,12 @@ export interface MatchedMarker {
   confirmationSource: string | null;
   source: "body" | "appendix";
   notes: string[];
+  /** ANA titer (e.g. "1:40") — only populated for synthesized ANA rows. */
+  titer?: string | null;
+  /** ANA pattern (e.g. "Nuclear, Speckled") — only populated for synthesized ANA rows. */
+  pattern?: string | null;
+  /** Debug flag set by the parser's ANA synthesis step. */
+  anaSynthesized?: boolean;
 }
 
 // Build a flat alias index once per module load. Each entry maps a
@@ -265,6 +271,10 @@ export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
       referenceRangeRaw,
       source,
       notes,
+      // Carry ANA sub-row fields through if the parser synthesized them.
+      ...(primary.titer !== undefined ? { titer: primary.titer } : {}),
+      ...(primary.pattern !== undefined ? { pattern: primary.pattern } : {}),
+      ...(primary.anaSynthesized ? { anaSynthesized: true } : {}),
     };
 
     if (candidates.length === 0) {

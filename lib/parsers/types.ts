@@ -25,6 +25,16 @@ export interface ParsedMarker {
   /** The original line text — useful for debugging parser issues. May contain
    *  patient name (PHI). Safe in-memory only; never persist this field. */
   rawLine: string;
+  /** ANA titer (e.g. "1:40", "1:160") when the parser synthesized the
+   *  ANA SCREEN/TITER/PATTERN multi-row Quest output into a single record.
+   *  Undefined for every other marker. */
+  titer?: string | null;
+  /** ANA pattern (e.g. "Nuclear, Speckled") when synthesized from Quest's
+   *  multi-row ANA output. Undefined for every other marker. */
+  pattern?: string | null;
+  /** True when this row was produced by the ANA SCREEN/TITER/PATTERN
+   *  synthesis post-processing step (debug aid). */
+  anaSynthesized?: boolean;
 }
 
 export interface PatientMeta {

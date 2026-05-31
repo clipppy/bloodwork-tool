@@ -2040,11 +2040,11 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     optimalRange: { min: null, max: null },
     flagType: "categorical",
     expectedValue: "Negative",
-    confirmationSource: "Melissa Carbone, clinical experience, email 2026-05-27",
+    confirmationSource: "Melissa Carbone, clinical experience + titer/pattern requirement confirmed email 2026-05-31",
     category: "immune_thyroid",
     increaseCauses: [],
     decreaseCauses: [],
-    notes: "Flag as out_of_range when reported result is anything other than 'Negative'. Titer/pattern are reported separately by labs but not used for flagging in v1.",
+    notes: "Quest reports ANA across 3 rows (Screen + Titer + Pattern). Parser synthesizes into single record. Categorical flag compares screen result; titer/pattern surfaced to practitioner as informational metadata.",
   },
   uric_acid: {
     canonicalName: "Uric Acid",
