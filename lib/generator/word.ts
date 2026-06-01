@@ -421,6 +421,11 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
   // Result table
   out.push(buildResultTable(m));
 
+  // ANA: render titer/pattern sub-line below the result table when
+  // either is populated (synthesized record from the parser).
+  const anaSubLine = buildAnaSubLine(m);
+  if (anaSubLine) out.push(anaSubLine);
+
   const hasNarrative = narrativeHasContent(narrative);
 
   if (hasNarrative) {
@@ -471,6 +476,23 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
 
   out.push(blankParagraph());
   return out;
+}
+
+/** Render the ANA titer/pattern sub-line that sits between the result
+ *  table and the narrative. Returns null when the marker is not ANA, or
+ *  when both fields are missing (e.g. negative ANA where Quest didn't
+ *  emit titer/pattern rows). */
+function buildAnaSubLine(m: FlaggedMarker): Paragraph | null {
+  if (!m.titer && !m.pattern) return null;
+  const parts: string[] = [];
+  if (m.titer) parts.push(`Titer: ${m.titer}`);
+  if (m.pattern) parts.push(`Pattern: ${m.pattern}`);
+  const text = parts.join("   ·   ");
+  return new Paragraph({
+    spacing: { before: 60, after: 60 },
+    indent: { left: 120 },
+    children: [runItalic(text, GREY, 20)], // 20 half-points = 10pt
+  });
 }
 
 function narrativeHasContent(n: MarkerNarrative | undefined): boolean {
