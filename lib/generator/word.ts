@@ -246,7 +246,12 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   for (const panel of PANELS) {
     const bucket = panelBuckets.get(panel.name)!;
     if (bucket.length === 0) continue;
-    children.push(...panelDivider(panel.name));
+    // ANA's panel name ("ANA") is just a prefix of its sole member's
+    // canonical name ("ANA (Anti-nuclear Antibodies)"), so the divider and
+    // the marker's section header would read as a visual double header.
+    // Suppress the divider for ANA so it renders like every other marker:
+    // a single Navy bold canonical-name section header.
+    if (panel.name !== "ANA") children.push(...panelDivider(panel.name));
     for (const m of bucket) children.push(...renderMarker(m));
   }
   if (additionalBucket.length > 0) {
@@ -462,6 +467,9 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
       !n.startsWith("LDL Pattern range column artifact") &&
       !n.startsWith("appendix range preferred") &&
       !n.startsWith("divergent value/unit") &&
+      // Redundant with the result table, which already shows the
+      // out-of-range result, lab value, and expected value side by side.
+      !n.startsWith('expected "') &&
       // Already implicit in the empty-marker footnote
       !(n === "no range available, refer to lab report" && !hasNarrative),
   );
