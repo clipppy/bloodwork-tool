@@ -228,9 +228,9 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   children.push(sectionHeading("TABLE OF CONTENTS"));
   for (const entry of [
     "Summary of Findings and Protocol",
-    "PART I — Lab Values and Data Analysis",
-    "PART II — Summary of Results",
-    "PART III — Dietary and Supplement Recommendations",
+    "PART I — Summary of Results",
+    "PART II — Dietary and Supplement Recommendations",
+    "PART III — Lab Values and Data Analysis",
   ]) {
     children.push(
       new Paragraph({
@@ -241,8 +241,21 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   }
   children.push(blankParagraph());
 
-  // PART I — markers grouped by panel
-  children.push(partHeading("PART I — Lab Values and Data Analysis"));
+  // PART I — Summary of Results
+  children.push(partHeading("PART I — Summary of Results"));
+  children.push(subHeading("Results:"));
+  children.push(placeholder("[Practitioner to summarize based on flagged markers below]"));
+  children.push(subHeading("Treatment Plan:"));
+  children.push(placeholder("[Practitioner to outline based on findings below]"));
+
+  // PART II — Dietary and Supplement Recommendations
+  children.push(blankParagraph());
+  children.push(partHeading("PART II — Dietary and Supplement Recommendations"));
+  children.push(placeholder("[Practitioner to complete]"));
+
+  // PART III — markers grouped by panel
+  children.push(blankParagraph());
+  children.push(partHeading("PART III — Lab Values and Data Analysis"));
   for (const panel of PANELS) {
     const bucket = panelBuckets.get(panel.name)!;
     if (bucket.length === 0) continue;
@@ -258,19 +271,6 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
     children.push(...panelDivider("Additional Markers"));
     for (const m of additionalBucket) children.push(...renderMarker(m));
   }
-
-  // PART II
-  children.push(blankParagraph());
-  children.push(partHeading("PART II — Summary of Results"));
-  children.push(subHeading("Results:"));
-  children.push(placeholder("[Practitioner to summarize based on flagged markers above]"));
-  children.push(subHeading("Treatment Plan:"));
-  children.push(placeholder("[Practitioner to outline based on findings]"));
-
-  // PART III
-  children.push(blankParagraph());
-  children.push(partHeading("PART III — Dietary and Supplement Recommendations"));
-  children.push(placeholder("[Practitioner to complete]"));
 
   // Pages compatibility note (after PART III, before appendix)
   children.push(blankParagraph());
