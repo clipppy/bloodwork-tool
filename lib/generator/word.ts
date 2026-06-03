@@ -294,25 +294,23 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
   // Appendix
   if (appendix.length > 0) {
     children.push(blankParagraph());
-    children.push(sectionHeading("Unmatched markers from this report"));
+    children.push(sectionHeading("Markers Not Analyzed in This Report"));
     children.push(
       new Paragraph({
         children: [
           runPlain(
-            "The following markers were present on the lab report but were not flagged by the tool — either because they are not in Melissa's confirmed marker list, were classified as not_flaggable (e.g. no lab range available, non-numeric value), or could not be matched to the optimal-ranges dictionary. Surface for manual review.",
+            "The following items from the lab report were not included in the analysis above. Some are excluded by clinical preference (e.g. ratios calculated from individual values, composite scores). Others are markers not yet in your confirmed range list. Any of these can be added to your range list if you'd like them included in future reports.",
           ),
         ],
         spacing: { after: 120 },
       }),
     );
     for (const u of appendix) {
-      const reason = u.flagNotes.join("; ") || "no reason recorded";
       children.push(
         new Paragraph({
           numbering: { reference: "bullets", level: 0 },
           children: [
             runBold(u.rawName || u.canonicalName || "(unknown)", NAVY),
-            runPlain(`  —  status: ${u.matchStatus}/${u.flagStatus}; ${reason}`),
           ],
         }),
       );
