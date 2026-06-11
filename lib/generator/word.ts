@@ -433,7 +433,7 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
 
   if (hasNarrative) {
     // Standard rendering: source citation (if any) then narrative.
-    if (m.confirmationSource && m.confirmationSource.startsWith("Melissa Carbone")) {
+    if (m.confirmationSource && m.confirmationSource.startsWith("Melissa ")) {
       out.push(
         new Paragraph({
           spacing: { before: 60, after: 80 },
@@ -512,7 +512,7 @@ function narrativeHasContent(n: MarkerNarrative | undefined): boolean {
 
 function buildEmptyFootnote(m: FlaggedMarker): Paragraph {
   const parts: string[] = [];
-  if (m.confirmationSource && m.confirmationSource.startsWith("Melissa Carbone")) {
+  if (m.confirmationSource && m.confirmationSource.startsWith("Melissa ")) {
     parts.push(`Range source: ${m.confirmationSource}`);
   }
   parts.push("Clinical interpretation to be completed by practitioner");
