@@ -2112,6 +2112,27 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     decreaseCauses: [],
     notes: "Per Melissa: flag against the lab-supplied range printed on each report. Estradiol/Estrone/Estriol now tracked as separate markers (estradiol, estrone, estriol).",
   },
+  zinc: {
+    canonicalName: "Zinc",
+    aliases: [
+      "ZINC",
+      "Zinc",
+      "Zinc, Serum",
+      "Zinc, Plasma",
+      "Zinc, Serum or Plasma",
+      "ZINC, SERUM OR PLASMA",
+      "zinc",
+    ],
+    unit: "mcg/dL",
+    labRange: { min: 60, max: 130 },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource: "Melissa Tulisano, email 2026-06-10, no optimal range exists; flag against lab range only",
+    category: "vitamins_minerals",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes: "Confirmed by Melissa Tulisano via email 2026-06-10. No optimal range exists per her clinical preference; uses lab range as flag boundary, consistent with Uric Acid, Cortisol, Estrogens pattern.",
+  },
 
   // ===== Markers added 2026-05-27 from Melissa's tracking form =====
   // All ranges below are from Melissa's tracking-form template, sent via email
