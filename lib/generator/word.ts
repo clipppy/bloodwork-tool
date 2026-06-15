@@ -43,6 +43,10 @@ const TEAL = "4A90A4";
 const LIGHT_TEAL = "DCE9EE"; // table header shading
 const GREY = "666666";
 const LIGHT_GREY = "CCCCCC";
+// Flag-level accents used only in the PART I flagged-markers summary.
+// (Brand Navy/Teal are unchanged; these are supplemental status colors.)
+const FLAG_RED = "C00000"; // HIGH / LOW / OUT OF RANGE
+const FLAG_YELLOW = "BF8F00"; // MODERATE (dark yellow for legibility)
 
 // ----- Page geometry (US Letter, 1" margins) -----
 const PAGE_WIDTH = 12240;
@@ -243,6 +247,7 @@ function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Docume
 
   // PART I — Summary of Results
   children.push(partHeading("PART I — Summary of Results"));
+  children.push(...buildFlaggedSummary(panelBuckets, additionalBucket));
   children.push(subHeading("Results:"));
   children.push(placeholder("[Practitioner to summarize based on flagged markers below]"));
   children.push(subHeading("Treatment Plan:"));
@@ -404,6 +409,131 @@ function panelDivider(name: string): Paragraph[] {
     children: [],
   });
   return [label, rule];
+}
+
+// ----- PART I flagged-markers summary -----
+
+// Flag levels surfaced in the PART I summary. OPTIMAL, NOT_FLAGGABLE and
+// INFORMATIONAL are intentionally excluded.
+const SUMMARY_FLAG_STATUSES = new Set([
+  "out_of_range",
+  "high",
+  "low",
+  "moderate",
+]);
+
+/** Severity tier for summary ordering: OUT OF RANGE first, then HIGH/LOW
+ *  (mixed by panel order), then MODERATE last. */
+function summarySeverityRank(status: string): number {
+  switch (status) {
+    case "out_of_range":
+      return 0;
+    case "high":
+    case "low":
+      return 1;
+    case "moderate":
+      return 2;
+    default:
+      return 99;
+  }
+}
+
+function summaryFlagLabel(status: string): string {
+  switch (status) {
+    case "out_of_range":
+      return "OUT OF RANGE";
+    case "high":
+      return "HIGH";
+    case "low":
+      return "LOW";
+    case "moderate":
+      return "MODERATE";
+    default:
+      return "";
+  }
+}
+
+function summaryFlagColor(status: string): string {
+  return status === "moderate" ? FLAG_YELLOW : FLAG_RED;
+}
+
+/**
+ * Build the "Flagged Markers" sub-section for the top of PART I: a
+ * severity-ordered bulleted list of every marker flagged as anything other
+ * than OPTIMAL. Preserves PART III panel ordering within each severity tier.
+ */
+function buildFlaggedSummary(
+  panelBuckets: Map<string, FlaggedMarker[]>,
+  additionalBucket: FlaggedMarker[],
+): Paragraph[] {
+  const out: Paragraph[] = [];
+  out.push(subHeading("Flagged Markers"));
+
+  // Reconstruct PART III display order: panels in declared order (each bucket
+  // already sorted by member rank), then additional markers.
+  const partIIIOrder: FlaggedMarker[] = [];
+  for (const panel of PANELS) partIIIOrder.push(...panelBuckets.get(panel.name)!);
+  partIIIOrder.push(...additionalBucket);
+
+  const flagged = partIIIOrder.filter((m) =>
+    SUMMARY_FLAG_STATUSES.has(m.flagStatus),
+  );
+
+  if (flagged.length === 0) {
+    out.push(
+      new Paragraph({
+        spacing: { before: 60, after: 120 },
+        children: [
+          runItalic(
+            "No markers flagged for review — all results within optimal ranges.",
+            GREY,
+            22,
+          ),
+        ],
+      }),
+    );
+    return out;
+  }
+
+  // Stable sort by severity tier (Node's sort is stable, so PART III order is
+  // preserved within each tier).
+  flagged.sort(
+    (a, b) =>
+      summarySeverityRank(a.flagStatus) - summarySeverityRank(b.flagStatus),
+  );
+
+  out.push(
+    new Paragraph({
+      spacing: { before: 60, after: 100 },
+      children: [
+        runPlain(
+          "The following markers were flagged for review. Full details and clinical narratives in PART III below.",
+        ),
+      ],
+    }),
+  );
+
+  for (const m of flagged) {
+    out.push(
+      new Paragraph({
+        numbering: { reference: "bullets", level: 0 },
+        children: [
+          runBold(m.canonicalName, NAVY),
+          runPlain(" — "),
+          new TextRun({
+            text: summaryFlagLabel(m.flagStatus),
+            bold: true,
+            color: summaryFlagColor(m.flagStatus),
+            size: 22,
+            font: "Arial",
+          }),
+          runPlain(` (${formatResultValue(m)})`),
+        ],
+      }),
+    );
+  }
+
+  return out;
 }
 
 // ----- Per-marker rendering -----
