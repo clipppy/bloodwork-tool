@@ -48,7 +48,20 @@ already on the machine so you only install what's missing.
    choose **Run as administrator**. Click **Yes** on the UAC prompt.
 2. Confirm the Windows version — run `winver` (a dialog should say **Windows 11**,
    version **24H2**), or check **Settings → System → About**.
-3. Check what's installed:
+3. **Allow PowerShell to run scripts (one-time).** Windows blocks PowerShell
+   scripts by default. This single command allows them for the current user —
+   needed for npm and git to work properly:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**Verify:** the prompt asks Y/N — type **`Y`** and press **Enter**.
+
+**If it fails:** usually means PowerShell isn't running as admin **or** the
+policy is enforced by group policy / IT. Contact Computech in that case.
+
+4. Check what's installed:
 
 ```powershell
 node --version          # Node.js (want v18.17+ or any v20 LTS)
@@ -60,6 +73,9 @@ $env:USERNAME           # her Windows username — note this down
 **Verify:** you want a `node` version of **v18.17 or higher** (v20.x LTS is
 ideal). On a fresh Windows machine, none of `node`, `npm`, or `git` will be
 present yet — that's expected.
+
+If `npm --version` returns **"running scripts is disabled,"** the execution
+policy step above was skipped. Run it and open a new PowerShell window.
 
 **If it fails:**
 - `node : The term 'node' is not recognized...` → Node isn't installed.
@@ -398,6 +414,16 @@ call Computech and ask them to whitelist these domains:
 - `git-scm.com`
 - `github.com` (and `*.githubusercontent.com`)
 - `registry.npmjs.org`
+
+**Task is registered but won't start the server** — `Get-ScheduledTask` shows
+the task exists, but `Start-ScheduledTask` doesn't bring up `localhost:3000`, and
+the log files don't exist or only contain old errors. The task is in a confused
+state — often after the wrapper script changes, or is added after the task was
+already registered. Unregister it and re-create it from scratch:
+```powershell
+Unregister-ScheduledTask -TaskName "BloodworkTool" -Confirm:$false
+```
+Then re-run the `Register-ScheduledTask` block from **Phase E**.
 
 **Other common causes when it won't start** (check the error log first):
 - **npm / Node not found** → the error log says so explicitly. Confirm
