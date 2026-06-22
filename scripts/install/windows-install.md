@@ -359,6 +359,42 @@ it solo.
 
 ---
 
+## Updating the tool
+
+When there's new code to deploy, **double-click `Update-BloodworkTool.cmd`** in
+`Documents\bloodwork-tool\scripts\install\`. That's the whole process — it pulls
+the latest code from GitHub, reinstalls dependencies, and restarts the tool the
+same way the scheduled task does. No PowerShell, no commands.
+
+> The `.cmd` just launches `Update-BloodworkTool.ps1` (next to it) with the right
+> execution policy. The update is a **hard reset to `origin/main`** — this machine
+> is a pristine mirror that's never edited locally, so it always matches GitHub
+> exactly. The tool runs in dev mode (`npm run ui`), so there's no build step.
+
+**What a successful run looks like:** a window opens, prints a timestamped line
+for each step (stop → pull → install → restart → health check), and ends with a
+green message like:
+
+```
+  SUCCESS: the Bloodwork Tool is updated and running.
+  Now at commit a1b2c3d. Open http://localhost:3000 to use it.
+```
+
+The key things to see are the **commit short-hash** and **`localhost:3000 UP`**.
+Press **Enter** to close the window, then refresh the browser.
+
+**If it fails:** the window shows a red message naming the step that failed and
+stays open so you can read it. Every run is also recorded to
+`update-log.txt` in the same folder (`scripts\install\update-log.txt`). **Send
+Clay that `update-log.txt` file** and he can diagnose it remotely.
+
+One known case it handles for you: if the scheduled task is in a "confused
+state" (see Troubleshooting), the script prints a clear remediation line telling
+you to re-register the task via the **Phase E** block, instead of failing
+silently.
+
+---
+
 # Troubleshooting
 
 Run these in PowerShell, as Melissa's user. A few need the **admin** window
@@ -384,11 +420,15 @@ Start-ScheduledTask -TaskName "BloodworkTool"
 Stop-ScheduledTask  -TaskName "BloodworkTool"
 ```
 
-**Update the tool to the latest code later:**
+**Update the tool to the latest code later:** the normal way is to double-click
+**`Update-BloodworkTool.cmd`** — see the **"Updating the tool"** section above.
+The manual equivalent, if you ever need it (note the **hard reset** to match the
+one-click script's pristine-mirror behavior):
 ```powershell
 cd $env:USERPROFILE\Documents\bloodwork-tool
-git pull
-npm install            # only needed if package.json changed; harmless to run anyway
+git fetch origin
+git reset --hard origin/main   # this machine is never edited locally
+npm ci                         # deterministic install from the lockfile
 Stop-ScheduledTask  -TaskName "BloodworkTool"
 Start-ScheduledTask -TaskName "BloodworkTool"
 ```
