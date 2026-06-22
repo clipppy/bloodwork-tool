@@ -391,7 +391,7 @@ function panelDivider(name: string): Paragraph[] {
       new TextRun({
         text: name.toUpperCase(),
         bold: true,
-        size: 18, // 9pt
+        size: 26, // 13pt
         color: TEAL,
         font: "Arial",
         // letter-spacing approximation via character spacing

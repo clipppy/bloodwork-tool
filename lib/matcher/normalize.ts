@@ -24,6 +24,7 @@ const TRAILING_QUALIFIERS = new Set([
   "ia",
   "serum",
   "fasting",
+  "plasma",
 ]);
 
 /** Strip trailing comma-separated qualifier tokens until the first
