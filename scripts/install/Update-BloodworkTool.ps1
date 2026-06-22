@@ -152,7 +152,7 @@ try {
     $step = '8/8 health check'
     Log "STEP $step : polling http://localhost:3000 (up to ~30s)"
     $isUp = $false
-    for ($i = 1; $i -le 15; $i++) {
+    for ($i = 1; $i -le 45; $i++) {
         try {
             $resp = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 5
             if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) { $isUp = $true; break }
