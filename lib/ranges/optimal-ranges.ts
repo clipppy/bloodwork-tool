@@ -1528,8 +1528,8 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     ],
     unit: "umol/L",
     labRange: { min: null, max: 10.4 },
-    optimalRange: { min: null, max: null },
-    flagType: "lab_range_only",
+    optimalRange: { min: null, max: 7 },
+    flagType: "optimal_two_tier",
     category: "vitamins_minerals",
     increaseCauses: [
       "B Vitamins help to maintain normalized homocysteine levels. If not absorbing B vitamins see elevation in homocysteine.",
