@@ -838,7 +838,13 @@ Pattern A (larger particles):`,
 A low platelet count, also called thrombocytopenia, and accompanying signs and symptoms may be caused by a number of conditions and factors. The causes typically fall into one of two general categories:`,
     increaseCauses: [],
     decreaseCauses: [],
-    additionalProse: {
+    // Two blocks: low/decrease-count causes, then a thrombocytosis
+    // transition line introducing the high/increase-count causes.
+    // Previously one block flattened both cause lists into a single bullet
+    // array with the transition line orphaned as `outro` (plan step 3 —
+    // re-partition only, no bullet added or removed).
+    additionalProse: [
+      {
         bullets: [
           `Disorders in which the bone marrow cannot produce enough platelets`,
           `Conditions in which platelets are used up (consumed) or destroyed faster than normal`,
@@ -857,6 +863,11 @@ A low platelet count, also called thrombocytopenia, and accompanying signs and s
           `Platelet consumption may be observed in various diseases and conditions. For example, disseminated intravascular coagulation (DIC), thrombocytopenic purpura (TTP) and hemolytic uremic syndrome (HUS) can result in fewer circulating platelets in the blood.`,
           `Exposure to toxic chemicals, such as pesticides, arsenic, or benzene`,
           `If the platelet count falls below 20,000 per microliter, spontaneous bleeding may occur and is considered a life-threatening risk. A person with a very low count may be given platelets through a transfusion. See Blood and Blood Components in the Blood Banking article for more details.`,
+        ],
+      },
+      {
+        intro: `A high platelet count may be referred to as thrombocytosis. This is usually the result of an existing condition (also called secondary or reactive thrombocytosis) such as:`,
+        bullets: [
           `Cancer, most commonly lung, gastrointestinal, ovarian, breast or lymphoma`,
           `Anemia, in particular iron-deficiency anemia and hemolytic anemia`,
           `Inflammatory conditions such as inflammatory bowel disease (IBD) or rheumatoid arthritis`,
@@ -869,8 +880,8 @@ A low platelet count, also called thrombocytopenia, and accompanying signs and s
           `Recovery from excess alcohol consumption and vitamin B12 and folate deficiency`,
           `Rarely, thrombocytosis is caused by a bone marrow disorder. An example is thrombocythemia, also called primary or essential thrombocythemia, a rare myeloproliferative disorder in which the bone marrow produces an extremely high number of platelets. Often there are no signs and symptoms and the condition is discovered when testing is done for a health check or for other reasons.`,
         ],
-        outro: `A high platelet count may be referred to as thrombocytosis. This is usually the result of an existing condition (also called secondary or reactive thrombocytosis) such as:`,
       },
+    ],
   },
   "MTHFR": {
     canonicalName: "MTHFR",
