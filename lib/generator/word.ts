@@ -30,6 +30,7 @@ import {
   PageNumber,
 } from "docx";
 import type { FlaggedMarker } from "../flagging";
+import { parseReferenceRange } from "../flagging/range-parse";
 import { findMarker } from "../ranges/optimal-ranges";
 import { MARKER_NARRATIVES } from "../narratives/marker-narratives";
 import type {
@@ -868,16 +869,41 @@ function optimalRangeColumnLabel(m: FlaggedMarker): string {
   return "Optimal Range";
 }
 
+/** Qualitative reference-range tokens that are legitimate to print in the Lab
+ *  Range cell even though they contain no digits (matched case-insensitively as
+ *  substrings). */
+const QUALITATIVE_RANGE_TOKENS = [
+  "negative", "positive", "reactive", "non-reactive", "not detected", "detected",
+  "normal", "see note", "follicular", "luteal", "midcycle", "menopausal",
+  "phase", "optimal", "moderate", "high", "low", "equivocal", "borderline",
+];
+
+/** Decide whether a raw printed reference-range string is safe to show in the
+ *  Lab Range cell, or is a parser fragment (e.g. "s for Leptin:") that should
+ *  render as "—". Conservative — shows the text if it looks like a real range
+ *  or result: it parses to a numeric range, OR contains any digit, OR contains
+ *  a known qualitative token. Never hides a legitimate range. */
+function displayLabRange(raw: string | null | undefined): string {
+  const s = (raw ?? "").trim();
+  if (!s) return "—";
+  const parsed = parseReferenceRange(s);
+  if (parsed.min !== null || parsed.max !== null) return s;
+  if (/\d/.test(s)) return s;
+  const lower = s.toLowerCase();
+  if (QUALITATIVE_RANGE_TOKENS.some((t) => lower.includes(t))) return s;
+  return "—";
+}
+
 function formatRange(m: FlaggedMarker, which: "lab" | "optimal"): string {
   const rec = findMarker(m.canonicalName);
-  if (!rec) return which === "lab" ? m.referenceRangeRaw || "—" : "—";
+  if (!rec) return which === "lab" ? displayLabRange(m.referenceRangeRaw) : "—";
 
   if (which === "lab") {
     const { min, max } = rec.labRange;
     if (min !== null && max !== null) return `${min}–${max}`;
     if (min !== null) return `≥ ${min}`;
     if (max !== null) return `< ${max}`;
-    return m.referenceRangeRaw || "—";
+    return displayLabRange(m.referenceRangeRaw);
   }
 
   if (m.flagType === "three_tier_band") {
