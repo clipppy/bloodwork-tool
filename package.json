@@ -17,6 +17,7 @@
     "test:parser": "tsx scripts/test-parser.ts",
     "test:range-parse": "tsx lib/flagging/range-parse.test.ts",
     "test:matcher": "tsx lib/matcher/index.test.ts",
+    "test:mthfr": "tsx lib/generator/mthfr-render.test.ts",
     "cli": "tsx cli/index.ts"
   },
   "dependencies": {

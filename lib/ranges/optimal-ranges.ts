@@ -2940,6 +2940,13 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "MTHFR Genotype",
       "MTHFR Mutation",
       "MTHFR Variant",
+      // Real reports list the two variants as separate rows (plan step 5) —
+      // resolve both to the shared MTHFR record instead of leaving them
+      // unmatched in the appendix (which suppressed the narrative).
+      "MTHFR C677T",
+      "MTHFR A1298C",
+      "C677T",
+      "A1298C",
       "mthfr",
     ],
     unit: "",
@@ -2951,6 +2958,12 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     increaseCauses: [],
     decreaseCauses: [],
     notes: "Informational genetic marker — no expectedValue. Engine returns flagStatus: 'informational'.",
+    // TODO(plan step 7): C677T and A1298C are clinically DIFFERENT variants but
+    // both currently resolve to canonical "MTHFR", so a report listing both
+    // rows would render this same narrative twice. How to present two variant
+    // rows (one shared explanation vs per-variant genotype notes) is a
+    // clinical-design decision that needs a real MTHFR report + Melissa's
+    // input. Do NOT add dedupe/merge until then.
   },
   egfr: {
     canonicalName: "eGFR",
