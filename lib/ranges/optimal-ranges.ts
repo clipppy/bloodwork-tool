@@ -2825,13 +2825,23 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "leptin",
     ],
     unit: "ng/mL",
-    labRange: { min: 4.7, max: 23.7 },
+    // Interim (plan step 4): display-only. Previously carried {4.7, 23.7} — the
+    // FEMALE adult range — which false-flagged a male patient (male range
+    // ~0.3-13.4) "low". The correct range is SEX/BMI-dependent, so we do NOT
+    // hardcode a single fallback. Fallback is display-only (not_flaggable); the
+    // printed range is a sex/BMI/age table parseReferenceRange refuses, so it
+    // won't auto-flag. confirmationSource kept so the "matched" filter in
+    // word.ts still renders it in the main report (not the appendix).
+    // TODO (plan step 6): add sex-aware ranges + thread patient sex into the
+    // flagging engine, alongside the Testosterone sex-aware work.
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
     flagType: "lab_range_only",
-    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27",
+    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27; single hardcoded range removed 2026-07-21 (sex/BMI-dependent — see TODO), display-only interim per plan step 4",
     category: "endocrine",
     increaseCauses: [],
     decreaseCauses: [],
+    notes: "Display-only interim: no auto-flag until sex/BMI-aware ranges are added (plan step 6). Prior {4.7, 23.7} was the female range and false-flagged male patients.",
   },
   methylmalonic_acid: {
     canonicalName: "Methylmalonic Acid",
