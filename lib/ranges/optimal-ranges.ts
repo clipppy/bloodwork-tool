@@ -669,6 +669,12 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "T4 TOTAL",
       "T4 Total",
       "T4, Total",
+      // Quest/Health Gorilla print the assay name inline as
+      // "T4 (THYROXINE), TOTAL"; qualifier-stripping leaves "t4 (thyroxine)"
+      // which no bare alias covered, so add explicit variants (plan step 3).
+      "T4 (Thyroxine), Total",
+      "T4 (THYROXINE), TOTAL",
+      "T4 (Thyroxine)",
       "Thyroxine",
       "Thyroxine (T4)",
       "Total T4",
