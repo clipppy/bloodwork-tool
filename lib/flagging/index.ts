@@ -37,6 +37,18 @@ export interface FlaggedMarker extends MatchedMarker {
   comparedAgainst: ComparedAgainst;
   flagType: FlagType | null;
   flagNotes: string[];
+  /** The lab range the flagging engine ACTUALLY used for this marker: the
+   *  printed range parsed off the report when it parsed, else the hardcoded
+   *  rec.labRange. Set for every matched marker; null for unmatched/no-record
+   *  markers. Exposed so the report's Lab Range column can show the same range
+   *  the flag was decided against. Display-only — never re-derive a flag from
+   *  it (the engine already did, above). */
+  effectiveLabRange: { min: number | null; max: number | null } | null;
+  /** Where effectiveLabRange came from: "printed" when the parsed printed range
+   *  drove it, "hardcoded" when it fell back to rec.labRange, null when
+   *  unmatched. Lets the report preserve the lab's original digit tokens for
+   *  printed ranges (via formatPrintedRange) vs numeric-format hardcoded ones. */
+  labRangeSource: "printed" | "hardcoded" | null;
 }
 
 // ----- helpers -----
@@ -71,6 +83,8 @@ function emptyFlag(
     comparedAgainst: null,
     flagType,
     flagNotes: notes,
+    effectiveLabRange: null,
+    labRangeSource: null,
   };
 }
 
@@ -161,6 +175,8 @@ function flagOptimalTwoTier(
       flagSeverity: "normal",
       comparedAgainst: "optimal",
       flagType: rec.flagType,
+      effectiveLabRange: null,
+      labRangeSource: null,
       flagNotes: extraNotes,
     };
   }
@@ -175,6 +191,8 @@ function flagOptimalTwoTier(
     flagSeverity: optimalSeverity(value, optimal, effectiveLab, direction),
     comparedAgainst: "optimal",
     flagType: rec.flagType,
+    effectiveLabRange: null,
+    labRangeSource: null,
     flagNotes: notes,
   };
 }
@@ -225,6 +243,8 @@ function flagLabRangeOnly(
       flagSeverity: "normal",
       comparedAgainst: "lab",
       flagType: rec.flagType,
+      effectiveLabRange: null,
+      labRangeSource: null,
       flagNotes: notes,
     };
   }
@@ -235,6 +255,8 @@ function flagLabRangeOnly(
     flagSeverity: "moderate",
     comparedAgainst: "lab",
     flagType: rec.flagType,
+    effectiveLabRange: null,
+    labRangeSource: null,
     flagNotes: notes,
   };
 }
@@ -291,6 +313,8 @@ function flagThreeTierBand(
     flagSeverity: severity,
     comparedAgainst: "optimal",
     flagType: rec.flagType,
+    effectiveLabRange: null,
+    labRangeSource: null,
     flagNotes: notes,
   };
 }
@@ -317,6 +341,8 @@ function flagCategorical(
     flagSeverity: matches ? "normal" : "moderate",
     comparedAgainst: "expected_value",
     flagType: rec.flagType,
+    effectiveLabRange: null,
+    labRangeSource: null,
     flagNotes: [
       ...extraNotes,
       `expected "${rec.expectedValue}", got "${value}"`,
@@ -357,18 +383,23 @@ export function flagMarker(m: MatchedMarker): FlaggedMarker {
   const printed: ParsedRange | null =
     parsedPrinted.min !== null || parsedPrinted.max !== null ? parsedPrinted : null;
 
+  let result: FlaggedMarker;
   switch (rec.flagType) {
     case "optimal_two_tier":
-      return flagOptimalTwoTier(m, rec, extraNotes, printed);
+      result = flagOptimalTwoTier(m, rec, extraNotes, printed);
+      break;
     case "lab_range_only":
-      return flagLabRangeOnly(m, rec, extraNotes, printed);
+      result = flagLabRangeOnly(m, rec, extraNotes, printed);
+      break;
     case "three_tier_band":
-      return flagThreeTierBand(m, rec, extraNotes);
+      result = flagThreeTierBand(m, rec, extraNotes);
+      break;
     case "categorical":
-      return flagCategorical(m, rec, extraNotes);
+      result = flagCategorical(m, rec, extraNotes);
+      break;
     default: {
       const _exhaustive: never = rec.flagType;
-      return emptyFlag(
+      result = emptyFlag(
         m,
         "not_flaggable",
         [...extraNotes, `unknown flagType: ${String(_exhaustive)}`],
@@ -376,6 +407,14 @@ export function flagMarker(m: MatchedMarker): FlaggedMarker {
       );
     }
   }
+
+  // Expose the SAME lab range flagging used above, for the report's Lab Range
+  // column: the parsed printed range when it parsed, else the hardcoded
+  // rec.labRange. Reuses `printed` — no re-derivation. Display-only: this does
+  // not change any flag decision made above.
+  result.effectiveLabRange = printed ?? rec.labRange;
+  result.labRangeSource = printed ? "printed" : "hardcoded";
+  return result;
 }
 
 export function flagMarkers(matched: MatchedMarker[]): FlaggedMarker[] {

@@ -30,7 +30,7 @@ import {
   PageNumber,
 } from "docx";
 import type { FlaggedMarker } from "../flagging";
-import { parseReferenceRange } from "../flagging/range-parse";
+import { parseReferenceRange, formatPrintedRange } from "../flagging/range-parse";
 import { findMarker } from "../ranges/optimal-ranges";
 import { MARKER_NARRATIVES } from "../narratives/marker-narratives";
 import type {
@@ -899,10 +899,23 @@ function formatRange(m: FlaggedMarker, which: "lab" | "optimal"): string {
   if (!rec) return which === "lab" ? displayLabRange(m.referenceRangeRaw) : "—";
 
   if (which === "lab") {
-    const { min, max } = rec.labRange;
-    if (min !== null && max !== null) return `${min}–${max}`;
-    if (min !== null) return `≥ ${min}`;
-    if (max !== null) return `< ${max}`;
+    // Show the SAME lab range the flag was decided against (from the flagging
+    // engine). For a printed range, preserve the lab's original digit tokens
+    // ("4.0–8.0", not "4–8") via formatPrintedRange; for a hardcoded fallback,
+    // numeric-format the bounds. Only when neither yields a bound do we fall
+    // through to the raw printed text (guarded) so Cortisol's dual range and
+    // the garbage-fragment "—" behavior still work.
+    if (m.labRangeSource === "printed") {
+      const printed = formatPrintedRange(m.referenceRangeRaw ?? "");
+      if (printed) return printed;
+    }
+    const eff = m.effectiveLabRange;
+    if (eff) {
+      const { min, max } = eff;
+      if (min !== null && max !== null) return `${min}–${max}`;
+      if (min !== null) return `≥ ${min}`;
+      if (max !== null) return `< ${max}`;
+    }
     return displayLabRange(m.referenceRangeRaw);
   }
 

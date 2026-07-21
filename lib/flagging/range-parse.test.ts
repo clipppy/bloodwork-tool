@@ -7,7 +7,11 @@
  */
 
 import assert from "node:assert/strict";
-import { parseReferenceRange, type ParsedRange } from "./range-parse";
+import {
+  parseReferenceRange,
+  formatPrintedRange,
+  type ParsedRange,
+} from "./range-parse";
 
 let passed = 0;
 const failures: string[] = [];
@@ -74,6 +78,36 @@ check("", { min: null, max: null });
 check("   ", { min: null, max: null });
 check("Not Established", { min: null, max: null });
 check("40", { min: null, max: null }); // bare number, no comparator → not a range
+
+// ----- formatPrintedRange: preserve original digit tokens, normalize only
+// punctuation (separator → en-dash, comparators → < / ≤ / ≥) -----
+function checkFmt(input: string, expected: string | null) {
+  const got = formatPrintedRange(input);
+  try {
+    assert.equal(got, expected);
+    passed++;
+  } catch {
+    failures.push(
+      `  ✗ formatPrintedRange(${JSON.stringify(input)})\n` +
+        `      expected ${JSON.stringify(expected)}\n` +
+        `      got      ${JSON.stringify(got)}`,
+    );
+  }
+}
+
+checkFmt("4.0-8.0", "4.0–8.0"); // decimals preserved, en-dash separator
+checkFmt("22-77", "22–77");
+checkFmt("<14", "< 14");
+checkFmt("< or = 2", "≤ 2");
+checkFmt("<= 2", "≤ 2");
+checkFmt(">40", "> 40");
+checkFmt("> or = 40", "≥ 40");
+checkFmt("50-180 mcg/dL", "50–180"); // trailing unit stripped
+checkFmt("0.8-1.8 (calc)", "0.8–1.8");
+checkFmt("s for Leptin:", null); // garbage → null
+checkFmt("8 a.m. 4.0-22.0 | 4 p.m. 3.0-17.0", null); // dual/prose → null
+checkFmt("", null);
+checkFmt("40", null); // bare number → null
 
 // ----- Report -----
 if (failures.length > 0) {

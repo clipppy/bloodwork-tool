@@ -23,13 +23,19 @@ const NONE: ParsedRange = { min: null, max: null };
 const NUM = "\\d+(?:\\.\\d+)?";
 
 const RANGE_RE = new RegExp(`^(${NUM})-(${NUM})$`);
-const LESS_RE = new RegExp(`^<=?(${NUM})$`); // "<14" | "<=2"
-const GREATER_RE = new RegExp(`^>=?(${NUM})$`); // ">40" | ">=40"
+const LESS_RE = new RegExp(`^(<=?)(${NUM})$`); // "<14" | "<=2"
+const GREATER_RE = new RegExp(`^(>=?)(${NUM})$`); // ">40" | ">=40"
 
-export function parseReferenceRange(raw: string): ParsedRange {
-  if (raw == null) return { ...NONE };
+/** Normalize a raw reference-range string to the canonical, whitespace-free
+ *  form the anchored patterns match: drop "(calc)", fold comparator glyphs /
+ *  worded forms to <= / >=, unify dashes, strip a trailing unit, remove spaces.
+ *  Returns "" when nothing usable remains. Shared by parseReferenceRange (which
+ *  reads the numeric bounds) and formatPrintedRange (which keeps the original
+ *  digit substrings for display). */
+function normalizeRangeString(raw: string): string {
+  if (raw == null) return "";
   let s = String(raw).trim();
-  if (!s) return { ...NONE };
+  if (!s) return "";
 
   // Drop a trailing "(calc)" / "(calc.)" annotation.
   s = s.replace(/\(calc\.?\)/gi, " ").trim();
@@ -52,7 +58,11 @@ export function parseReferenceRange(raw: string): ParsedRange {
   // Collapse all remaining internal whitespace so "< = 2" → "<=2", "22 - 77"
   // → "22-77". Any prose with embedded numbers still won't match the anchored
   // patterns below.
-  s = s.replace(/\s+/g, "");
+  return s.replace(/\s+/g, "");
+}
+
+export function parseReferenceRange(raw: string): ParsedRange {
+  const s = normalizeRangeString(raw);
   if (!s) return { ...NONE };
 
   let m: RegExpMatchArray | null;
@@ -61,11 +71,37 @@ export function parseReferenceRange(raw: string): ParsedRange {
     return { min: Number.parseFloat(m[1]), max: Number.parseFloat(m[2]) };
   }
   if ((m = s.match(LESS_RE))) {
-    return { min: null, max: Number.parseFloat(m[1]) };
+    return { min: null, max: Number.parseFloat(m[2]) };
   }
   if ((m = s.match(GREATER_RE))) {
-    return { min: Number.parseFloat(m[1]), max: null };
+    return { min: Number.parseFloat(m[2]), max: null };
   }
 
   return { ...NONE };
+}
+
+/** Display form of a printed reference range that PRESERVES the lab's original
+ *  digit tokens (so "4.0-8.0" stays "4.0", not "4"), normalizing only the
+ *  punctuation: separator → en-dash, comparators → "< " / "≤ " / "> " / "≥ ".
+ *  Returns null for anything parseReferenceRange would refuse (prose, tables,
+ *  multi-range strings) so the caller can fall back. Examples:
+ *    "4.0-8.0" → "4.0–8.0"   "22-77" → "22–77"   "<14" → "< 14"
+ *    "< or = 2" → "≤ 2"      ">40" → "> 40"      garbage → null */
+export function formatPrintedRange(raw: string): string | null {
+  const s = normalizeRangeString(raw);
+  if (!s) return null;
+
+  let m: RegExpMatchArray | null;
+
+  if ((m = s.match(RANGE_RE))) {
+    return `${m[1]}–${m[2]}`;
+  }
+  if ((m = s.match(LESS_RE))) {
+    return `${m[1] === "<=" ? "≤" : "<"} ${m[2]}`;
+  }
+  if ((m = s.match(GREATER_RE))) {
+    return `${m[1] === ">=" ? "≥" : ">"} ${m[2]}`;
+  }
+
+  return null;
 }
