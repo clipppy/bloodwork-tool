@@ -13,6 +13,7 @@ import {
   type InterpretationBand,
   type MarkerRange,
 } from "../ranges/optimal-ranges";
+import { parseReferenceRange, type ParsedRange } from "./range-parse";
 
 export type FlagStatus =
   | "optimal"
@@ -46,6 +47,14 @@ function toNumber(v: number | string): number | null {
   if (!cleaned) return null;
   const n = Number.parseFloat(cleaned);
   return Number.isFinite(n) ? n : null;
+}
+
+/** Render a parsed printed range for the audit note ("22-77", "<14", ">40"). */
+function formatEffectiveRange(r: ParsedRange): string {
+  if (r.min !== null && r.max !== null) return `${r.min}-${r.max}`;
+  if (r.max !== null) return `<${r.max}`;
+  if (r.min !== null) return `>${r.min}`;
+  return "";
 }
 
 function emptyFlag(
@@ -115,6 +124,7 @@ function flagOptimalTwoTier(
   m: MatchedMarker,
   rec: MarkerRange,
   extraNotes: string[],
+  printed: ParsedRange | null,
 ): FlaggedMarker {
   const value = toNumber(m.value);
   if (value === null) {
@@ -134,6 +144,11 @@ function flagOptimalTwoTier(
       rec.flagType,
     );
   }
+  // optimalRange stays fixed (Melissa's clinical values). Only the lab range —
+  // used for the "outside lab range → severe" severity step — becomes the
+  // per-report printed range when one parsed off the PDF.
+  const effectiveLab = printed ?? rec.labRange;
+
   let direction: FlagDirection = null;
   if (optimal.max !== null && value > optimal.max) direction = "high";
   else if (optimal.min !== null && value < optimal.min) direction = "low";
@@ -149,14 +164,18 @@ function flagOptimalTwoTier(
       flagNotes: extraNotes,
     };
   }
+  const notes = [...extraNotes];
+  if (printed) {
+    notes.push(`lab range read from report: ${formatEffectiveRange(printed)}`);
+  }
   return {
     ...m,
     flagStatus: direction,
     flagDirection: direction,
-    flagSeverity: optimalSeverity(value, optimal, rec.labRange, direction),
+    flagSeverity: optimalSeverity(value, optimal, effectiveLab, direction),
     comparedAgainst: "optimal",
     flagType: rec.flagType,
-    flagNotes: extraNotes,
+    flagNotes: notes,
   };
 }
 
@@ -164,6 +183,7 @@ function flagLabRangeOnly(
   m: MatchedMarker,
   rec: MarkerRange,
   extraNotes: string[],
+  printed: ParsedRange | null,
 ): FlaggedMarker {
   const notes = [...extraNotes];
   if (rec.cyclePhaseDependent) {
@@ -180,7 +200,12 @@ function flagLabRangeOnly(
       rec.flagType,
     );
   }
-  const lab = rec.labRange;
+  // Prefer the per-report printed range over the hardcoded labRange when one
+  // parsed off the PDF (one hardcoded range can't be right for every lab).
+  const lab = printed ?? rec.labRange;
+  if (printed) {
+    notes.push(`lab range read from report: ${formatEffectiveRange(printed)}`);
+  }
   if (lab.min === null && lab.max === null) {
     return emptyFlag(
       m,
@@ -325,11 +350,18 @@ export function flagMarker(m: MatchedMarker): FlaggedMarker {
     extraNotes.push("range pending confirmation from Melissa");
   }
 
+  // Read the lab range printed on this specific report. Used only by the two
+  // numeric flag types below; a non-numeric/prose range yields {null,null},
+  // in which case the handlers fall back to the hardcoded rec.labRange.
+  const parsedPrinted = parseReferenceRange(m.referenceRangeRaw ?? "");
+  const printed: ParsedRange | null =
+    parsedPrinted.min !== null || parsedPrinted.max !== null ? parsedPrinted : null;
+
   switch (rec.flagType) {
     case "optimal_two_tier":
-      return flagOptimalTwoTier(m, rec, extraNotes);
+      return flagOptimalTwoTier(m, rec, extraNotes, printed);
     case "lab_range_only":
-      return flagLabRangeOnly(m, rec, extraNotes);
+      return flagLabRangeOnly(m, rec, extraNotes, printed);
     case "three_tier_band":
       return flagThreeTierBand(m, rec, extraNotes);
     case "categorical":

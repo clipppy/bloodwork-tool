@@ -2159,10 +2159,18 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "testosterone total",
     ],
     unit: "ng/dL",
-    labRange: { min: 2, max: 45 },
+    // Corrected 2026-07-21: previously carried {2, 45}, the wrong scale for
+    // total testosterone (ng/dL), which false-flagged male values (~500-650) as
+    // "high". The correct reference range is SEX-SPECIFIC (male ~250-1100,
+    // female ~8-60 ng/dL), so we do NOT hardcode a single fallback — that would
+    // false-flag by sex when no printed range exists. Fallback is display-only
+    // (not_flaggable); a printed range still wins (step 1).
+    // TODO (plan step 6): add optimalRangeBySex + thread patient sex into the
+    // flagging engine, alongside the Leptin sex-aware work.
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
     flagType: "lab_range_only",
-    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27",
+    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27; single hardcoded range removed 2026-07-21 (sex-specific — see TODO)",
     category: "endocrine",
     increaseCauses: [],
     decreaseCauses: [],
@@ -2178,10 +2186,18 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "testosterone free",
     ],
     unit: "pg/mL",
-    labRange: { min: 0.2, max: 5.0 },
+    // Corrected 2026-07-21: previously carried {0.2, 5.0}, the wrong scale for
+    // free testosterone (pg/mL), which false-flagged male values (~78-80 pg/mL)
+    // as "high". The correct reference range is SEX-SPECIFIC (male ~35-155,
+    // female ~0.1-6.4 pg/mL), so we do NOT hardcode a single fallback — that
+    // would false-flag by sex when no printed range exists. Fallback is
+    // display-only (not_flaggable); a printed range still wins (step 1).
+    // TODO (plan step 6): add optimalRangeBySex + thread patient sex into the
+    // flagging engine, alongside the Leptin sex-aware work.
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
     flagType: "lab_range_only",
-    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27",
+    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27; single hardcoded range removed 2026-07-21 (sex-specific — see TODO)",
     category: "endocrine",
     increaseCauses: [],
     decreaseCauses: [],
@@ -2953,14 +2969,20 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "rbc magnesium",
     ],
     unit: "mg/dL",
-    labRange: { min: 1.5, max: 2.5 },
+    // Corrected 2026-07-21: previously carried {1.5, 2.5}, which is the SERUM
+    // magnesium range — wrong for an RBC (intracellular) magnesium measure and
+    // caused false "high" flags on every real report (values ~5 mg/dL). Now the
+    // standard adult RBC magnesium reference range, matching the range Quest
+    // prints on these reports (4.0-6.4 mg/dL). Fallback used only when a report
+    // doesn't print its own range; a printed range still wins (step 1).
+    labRange: { min: 4.0, max: 6.4 },
     optimalRange: { min: null, max: null },
     flagType: "lab_range_only",
-    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27",
+    confirmationSource: "Quest Diagnostics RBC magnesium reference range (4.0-6.4 mg/dL), as printed on sample reports; supersedes prior serum-range value pending Melissa confirmation",
     category: "vitamins_minerals",
     increaseCauses: [],
     decreaseCauses: [],
-    notes: "Per Melissa: 1.5-2.5 mg/dL. Distinct from serum magnesium — intracellular measure.",
+    notes: "Standard adult RBC (intracellular) magnesium reference range, distinct from serum magnesium (~1.5-2.5 mg/dL). Previously mislabeled with the serum range.",
   },
 
   // ----- Urinalysis (lab_range_only — ranges from Quest report) -----
