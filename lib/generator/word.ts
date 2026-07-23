@@ -172,16 +172,20 @@ export async function generateWordReport(
 // ----- Document assembly -----
 
 function buildDocument(flagged: FlaggedMarker[], opts: GeneratorOptions): Document {
-  // PART I = every matched marker EXCEPT not_flaggable-without-source.
+  // PART I = every matched marker EXCEPT not_flaggable-without-source, PLUS
+  // lab-flag safety-net markers (unmatched but flagged by the lab) — these must
+  // surface in the MAIN report, never be dropped to the appendix.
   const matched = flagged.filter(
     (f) =>
-      f.matchStatus === "matched" &&
-      (f.flagStatus !== "not_flaggable" || !!f.confirmationSource),
+      f.labFlagFallback ||
+      (f.matchStatus === "matched" &&
+        (f.flagStatus !== "not_flaggable" || !!f.confirmationSource)),
   );
   const appendix = flagged.filter(
     (f) =>
-      f.matchStatus !== "matched" ||
-      (f.flagStatus === "not_flaggable" && !f.confirmationSource),
+      !f.labFlagFallback &&
+      (f.matchStatus !== "matched" ||
+        (f.flagStatus === "not_flaggable" && !f.confirmationSource)),
   );
 
   // Bucket matched markers by panel; preserve declared panel-member order.
@@ -519,7 +523,7 @@ function buildFlaggedSummary(
       new Paragraph({
         numbering: { reference: "bullets", level: 0 },
         children: [
-          runBold(m.canonicalName, NAVY),
+          runBold(m.canonicalName || m.rawName, NAVY),
           runPlain(" — "),
           new TextRun({
             text: summaryFlagLabel(m.flagStatus),
@@ -543,10 +547,12 @@ function renderMarker(m: FlaggedMarker): Array<Paragraph | Table> {
   const out: Array<Paragraph | Table> = [];
   const narrative = MARKER_NARRATIVES[m.canonicalName];
 
-  // Section heading: marker name in Navy, consistent spacing.
+  // Section heading: marker name in Navy, consistent spacing. Fall back to the
+  // raw PDF name for unmatched markers surfaced by the lab-flag safety net
+  // (they have no canonicalName).
   out.push(
     new Paragraph({
-      children: [runBold(m.canonicalName, NAVY, 26)],
+      children: [runBold(m.canonicalName || m.rawName, NAVY, 26)],
       spacing: { before: HEADER_SPACING_BEFORE, after: HEADER_SPACING_AFTER },
       keepNext: true,
     }),

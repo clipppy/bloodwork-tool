@@ -49,6 +49,12 @@ export interface FlaggedMarker extends MatchedMarker {
    *  unmatched. Lets the report preserve the lab's original digit tokens for
    *  printed ranges (via formatPrintedRange) vs numeric-format hardcoded ones. */
   labRangeSource: "printed" | "hardcoded" | null;
+  /** True when this flag came from the lab-flag safety net: the tool had no
+   *  usable reference range (unmatched, or matched with no range) but the lab
+   *  printed an H/L, so we surfaced it using the lab's flag rather than going
+   *  silent. Drives report routing (must appear in the MAIN report, never the
+   *  appendix) and the "refer to lab report" note. */
+  labFlagFallback?: boolean;
 }
 
 // ----- helpers -----
@@ -352,7 +358,37 @@ function flagCategorical(
 
 // ----- public API -----
 
+/** Safety net for lab-flagged markers the tool can't flag itself.
+ *
+ *  If the normal logic came back not_flaggable (marker unmatched, or matched
+ *  but with no usable reference range) BUT the lab printed an H/L flag next to
+ *  the value, we must NOT stay silent: surface it using the lab's own flag so
+ *  it can never be quietly dropped. Never touches a marker the tool already
+ *  flagged (or judged optimal/informational) on its own. */
+function applyLabFlagSafetyNet(result: FlaggedMarker): FlaggedMarker {
+  if (result.flagStatus !== "not_flaggable") return result;
+  const lab = result.labFlagFromPdf;
+  if (lab !== "H" && lab !== "L") return result;
+
+  return {
+    ...result,
+    flagStatus: lab === "H" ? "high" : "low",
+    flagDirection: lab === "H" ? "high" : "low",
+    flagSeverity: "moderate",
+    comparedAgainst: "lab",
+    labFlagFallback: true,
+    flagNotes: [
+      ...result.flagNotes,
+      "Flagged by the lab; this tool has no reference range for this marker yet — refer to lab report.",
+    ],
+  };
+}
+
 export function flagMarker(m: MatchedMarker): FlaggedMarker {
+  return applyLabFlagSafetyNet(computeFlag(m));
+}
+
+function computeFlag(m: MatchedMarker): FlaggedMarker {
   if (m.matchStatus !== "matched") {
     return emptyFlag(
       m,

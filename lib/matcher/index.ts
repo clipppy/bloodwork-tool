@@ -28,6 +28,10 @@ export interface MatchedMarker {
   canonicalName: string;
   value: number | string;
   unit: string;
+  /** H/L flag the lab itself printed next to the value, carried through from
+   *  the parser's ParsedMarker so the flagging engine can fall back on it when
+   *  the tool has no reference range of its own. */
+  labFlagFromPdf: "H" | "L" | null;
   referenceRangeRaw: string;
   optimalRange: { min: number | null; max: number | null; unit: string } | null;
   matchStatus: "matched" | "unmatched" | "ambiguous";
@@ -268,6 +272,7 @@ export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
       rawName: primary.rawName,
       value: primary.value,
       unit: primary.unit ?? "",
+      labFlagFromPdf: primary.labFlagFromPdf,
       referenceRangeRaw,
       source,
       notes,
