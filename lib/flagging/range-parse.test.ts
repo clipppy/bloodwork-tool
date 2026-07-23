@@ -79,6 +79,20 @@ check("   ", { min: null, max: null });
 check("Not Established", { min: null, max: null });
 check("40", { min: null, max: null }); // bare number, no comparator → not a range
 
+// ----- Multi-segment " | " recovery: exactly ONE distinct range across the
+// parseable segments → recover it; ZERO or 2+ distinct → still {null,null}.
+// Recovers real ranges buried by the parser's spill-join of duplicate/comment
+// fragments (Apolipoprotein B, Linoleic Acid, Estradiol). -----
+check("<90 | <90", { min: null, max: 90 }); // duplicate join → one distinct
+check("18.6-29.5 | /Comments", { min: 18.6, max: 29.5 }); // range + comment junk
+check("< OR = 39 | established on post-pubertal patient", { min: null, max: 39 });
+check("18.6-29.5\n/Comments", { min: 18.6, max: 29.5 }); // newline split too
+
+// Two-or-more DISTINCT ranges must stay refused (do NOT pick one arbitrarily):
+check("2.5-10.2 | 3.1-17.7 | 1.5-9.1 | 23.0-116.3", { min: null, max: null }); // cycle table
+check("8 a.m. 4.0-22.0 | 4 p.m. 3.0-17.0", { min: null, max: null }); // cortisol dual (prose)
+check("4.0-22.0 | 3.0-17.0", { min: null, max: null }); // cortisol dual (clean, 2 distinct)
+
 // ----- formatPrintedRange: preserve original digit tokens, normalize only
 // punctuation (separator → en-dash, comparators → < / ≤ / ≥) -----
 function checkFmt(input: string, expected: string | null) {
@@ -108,6 +122,12 @@ checkFmt("s for Leptin:", null); // garbage → null
 checkFmt("8 a.m. 4.0-22.0 | 4 p.m. 3.0-17.0", null); // dual/prose → null
 checkFmt("", null);
 checkFmt("40", null); // bare number → null
+
+// Multi-segment recovery mirrors parseReferenceRange (one distinct → recover):
+checkFmt("<90 | <90", "< 90");
+checkFmt("18.6-29.5 | /Comments", "18.6–29.5");
+checkFmt("< OR = 39 | established on post-pubertal patient", "≤ 39");
+checkFmt("4.0-22.0 | 3.0-17.0", null); // 2 distinct → still refused
 
 // ----- Report -----
 if (failures.length > 0) {

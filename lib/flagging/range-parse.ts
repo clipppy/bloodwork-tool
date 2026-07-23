@@ -61,9 +61,13 @@ function normalizeRangeString(raw: string): string {
   return s.replace(/\s+/g, "");
 }
 
-export function parseReferenceRange(raw: string): ParsedRange {
+/** Parse a SINGLE segment (the strict, anchored core). Returns the numeric
+ *  bounds, or null when the whole normalized segment is not one range /
+ *  comparator expression. This is the original parseReferenceRange behaviour,
+ *  factored out so the multi-segment recovery below can reuse it. */
+function matchSingleRange(raw: string): ParsedRange | null {
   const s = normalizeRangeString(raw);
-  if (!s) return { ...NONE };
+  if (!s) return null;
 
   let m: RegExpMatchArray | null;
 
@@ -77,7 +81,63 @@ export function parseReferenceRange(raw: string): ParsedRange {
     return { min: Number.parseFloat(m[2]), max: null };
   }
 
-  return { ...NONE };
+  return null;
+}
+
+/** A numeric identity key for a parsed range, so duplicate segments that mean
+ *  the same range ("<90 | <90") collapse to one. */
+function rangeKey(r: ParsedRange): string {
+  return `${r.min}|${r.max}`;
+}
+
+/** Split a raw reference-range string into candidate segments on " | " joins
+ *  (how the parser stitches spilled range/comment lines) and newlines. */
+function splitSegments(raw: string): string[] {
+  if (raw == null) return [];
+  return String(raw)
+    .split(/\s*\|\s*|[\r\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Conservative multi-segment recovery: split the raw string, parse each
+ *  segment with the strict single-segment matcher, dedup by numeric identity,
+ *  and return a range ONLY when every parseable segment agrees on exactly ONE
+ *  distinct range. Returns null (caller falls back to hardcoded) when nothing
+ *  parses or when segments disagree — so cycle-phase FSH/LH tables and
+ *  cortisol's dual 8am|4pm range stay refused instead of being flagged against
+ *  one arbitrary segment. `pick` maps the winning segment to the caller's
+ *  return shape (bounds for parse, display string for format). */
+function recoverFromSegments<T>(
+  raw: string,
+  pick: (seg: string, parsed: ParsedRange) => T | null,
+): T | null {
+  const segs = splitSegments(raw);
+  if (segs.length < 2) return null;
+
+  const seenKeys = new Set<string>();
+  let only: T | null = null;
+  for (const seg of segs) {
+    const parsed = matchSingleRange(seg);
+    if (!parsed) continue;
+    const value = pick(seg, parsed);
+    if (value == null) continue;
+    const key = rangeKey(parsed);
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      only = value; // first value seen for this distinct range
+    }
+  }
+
+  return seenKeys.size === 1 ? only : null;
+}
+
+export function parseReferenceRange(raw: string): ParsedRange {
+  const whole = matchSingleRange(raw);
+  if (whole) return whole;
+
+  const recovered = recoverFromSegments(raw, (_seg, parsed) => parsed);
+  return recovered ?? { ...NONE };
 }
 
 /** Display form of a printed reference range that PRESERVES the lab's original
@@ -87,7 +147,9 @@ export function parseReferenceRange(raw: string): ParsedRange {
  *  multi-range strings) so the caller can fall back. Examples:
  *    "4.0-8.0" → "4.0–8.0"   "22-77" → "22–77"   "<14" → "< 14"
  *    "< or = 2" → "≤ 2"      ">40" → "> 40"      garbage → null */
-export function formatPrintedRange(raw: string): string | null {
+/** Single-segment display formatter (anchored core). Returns the normalized
+ *  display string, or null when the segment is not one range / comparator. */
+function matchSingleFormat(raw: string): string | null {
   const s = normalizeRangeString(raw);
   if (!s) return null;
 
@@ -104,4 +166,14 @@ export function formatPrintedRange(raw: string): string | null {
   }
 
   return null;
+}
+
+export function formatPrintedRange(raw: string): string | null {
+  const whole = matchSingleFormat(raw);
+  if (whole) return whole;
+
+  // Mirror parseReferenceRange: recover only when every parseable segment
+  // agrees on one distinct range (dedup keyed by numeric identity, so the
+  // display string and the parsed bounds make the same accept/refuse call).
+  return recoverFromSegments(raw, (seg) => matchSingleFormat(seg));
 }
