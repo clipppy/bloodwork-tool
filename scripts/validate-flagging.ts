@@ -23,6 +23,7 @@ import * as path from "node:path";
 import { parseQuestPdf } from "../lib/parsers/quest";
 import { matchMarkers } from "../lib/matcher";
 import { flagMarkers, type FlaggedMarker } from "../lib/flagging";
+import { parseReferenceRange } from "../lib/flagging/range-parse";
 import { OPTIMAL_RANGES, findMarker } from "../lib/ranges/optimal-ranges";
 
 const SAMPLES = [
@@ -200,7 +201,15 @@ async function main() {
   console.log(`  TOTAL records: ${Object.keys(OPTIMAL_RANGES).length}`);
   if (missing > 0) console.log(`  ⚠ ${missing} records missing flagType`);
 
+  // ----- Structural invariants (execute against the present real reports) -----
+  const invariantsFailed = runStructuralInvariants(results);
+
   console.log("\nValidation complete.\n");
+
+  if (invariantsFailed) {
+    console.error("Structural invariants FAILED — see above.\n");
+    process.exit(1);
+  }
 }
 
 // ===========================================================================
@@ -299,102 +308,152 @@ function writeDiffMarkdown(rows: DiffRow[], sampleCount: number, markersCompared
 }
 
 // ---------------------------------------------------------------------------
-// Clinical assertions (plan §Validation step 2).
+// Structural invariants for printed-range extraction (replaces the old
+// patient-keyed clinical assertions, which SKIPPED because they were tied to
+// specific report filenames that never landed).
 //
-// Dormant until the specific reports are present: each is keyed to a report by
-// filename hint. If no present sample's basename matches the hints, the check
-// is SKIPPED (not failed). Once the report lands, an unmet assertion FAILS the
-// process (exit 1).
-//
-// NOTE: the "T4 Total → matched" check depends on the alias fix in step 3 of
-// the plan — it will FAIL when Chris's report is added until step 3 lands.
-// That's intentional: it documents the required end state.
-//
-// If the real reports are named differently, update `hints` below.
+// These are STRUCTURAL: they run against whatever real reports are in samples/
+// and assert properties that must hold for every matching row across all of
+// them — no hardcoded patient values. They EXECUTE (never skip) as long as any
+// sample is present, so they can't silently pass by being dormant.
 // ---------------------------------------------------------------------------
-interface Assertion {
-  canonical: string;
-  expect: (f: FlaggedMarker) => boolean;
-  expectation: string;
-}
-interface ReportCheck {
+interface FlagRow {
   report: string;
-  hints: string[];
-  assertions: Assertion[];
+  f: FlaggedMarker;
+}
+interface Invariant {
+  name: string;
+  /** Rows this invariant applies to (its "population"). */
+  applies: (r: FlagRow) => boolean;
+  /** Must hold for every applicable row. */
+  holds: (r: FlagRow) => boolean;
+  /** Human-readable expectation, and a per-row detail for failures/samples. */
+  expectation: string;
+  detail: (r: FlagRow) => string;
 }
 
-const CLINICAL_CHECKS: ReportCheck[] = [
+/** A referenceRangeRaw that is a multi-phase cycle table (FSH/LH by menstrual
+ *  phase, or otherwise several labelled ranges). The conservative spill-join
+ *  MUST refuse these — they have no single defensible range. */
+function isCyclePhaseTable(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  return /follicular|luteal|mid-?cycle|postmenopausal|ovulation/i.test(raw);
+}
+
+/** parseReferenceRange returned a usable bound (min or max). */
+function hasRecoverableRange(raw: string | null | undefined): boolean {
+  const p = parseReferenceRange(raw ?? "");
+  return p.min !== null || p.max !== null;
+}
+
+const INVARIANTS: Invariant[] = [
   {
-    report: "Roberto (Functional Health via Health Gorilla)",
-    hints: ["roberto"],
-    assertions: [
-      {
-        canonical: "Rheumatoid Factor",
-        expect: (f) => f.matchStatus === "matched" && f.flagStatus === "optimal",
-        expectation: "matched & in range (optimal)",
-      },
-      {
-        canonical: "SHBG (Sex Hormone Binding Globulin)",
-        expect: (f) => f.matchStatus === "matched" && f.flagStatus === "high",
-        expectation: "matched & high",
-      },
-    ],
+    name: "1. Rheumatoid Factor: matched, printed range always read (never hardcoded)",
+    applies: (r) => r.f.canonicalName === "Rheumatoid Factor",
+    holds: (r) => r.f.matchStatus === "matched" && r.f.labRangeSource !== "hardcoded",
+    expectation: "matchStatus=matched AND labRangeSource≠hardcoded",
+    detail: (r) =>
+      `match=${r.f.matchStatus} src=${r.f.labRangeSource} flag=${r.f.flagStatus} printed="${r.f.referenceRangeRaw?.trim() || "(none)"}"`,
   },
   {
-    report: "Chris Vasser (Quest)",
-    hints: ["chris", "vasser"],
-    assertions: [
-      {
-        canonical: "SHBG (Sex Hormone Binding Globulin)",
-        expect: (f) => f.matchStatus === "matched" && f.flagStatus === "high",
-        expectation: "matched & high",
-      },
-      {
-        canonical: "T4 Total",
-        expect: (f) => f.matchStatus === "matched",
-        expectation: "matched (depends on step 3 alias fix)",
-      },
-    ],
+    name: "2. SHBG: matched with labRangeSource=printed (cross-lab extraction — headline win)",
+    applies: (r) => r.f.canonicalName === "SHBG (Sex Hormone Binding Globulin)",
+    holds: (r) => r.f.matchStatus === "matched" && r.f.labRangeSource === "printed",
+    expectation: "matchStatus=matched AND labRangeSource=printed",
+    detail: (r) =>
+      `match=${r.f.matchStatus} src=${r.f.labRangeSource} flag=${r.f.flagStatus} printed="${r.f.referenceRangeRaw?.trim() || "(none)"}"`,
+  },
+  {
+    name: "3. Apolipoprotein B: labRangeSource=printed with upper bound 90 (locks in spill-join recovery)",
+    applies: (r) => r.f.canonicalName === "Apoliopoprotein B",
+    holds: (r) =>
+      r.f.labRangeSource === "printed" &&
+      r.f.effectiveLabRange?.max === 90,
+    expectation: "labRangeSource=printed AND effectiveLabRange.max=90",
+    detail: (r) =>
+      `src=${r.f.labRangeSource} eff.max=${r.f.effectiveLabRange?.max ?? "null"} flag=${r.f.flagStatus} printed="${r.f.referenceRangeRaw?.trim() || "(none)"}"`,
+  },
+  {
+    name: "4. FSH/LH multi-phase cycle table: not_flaggable (spill-join must not pick one phase)",
+    applies: (r) =>
+      (r.f.canonicalName === "FSH (Follicle Stimulating Hormone)" ||
+        r.f.canonicalName === "LH (Luteinizing Hormone)") &&
+      isCyclePhaseTable(r.f.referenceRangeRaw),
+    holds: (r) => r.f.flagStatus === "not_flaggable",
+    expectation: "flagStatus=not_flaggable",
+    detail: (r) =>
+      `flag=${r.f.flagStatus} src=${r.f.labRangeSource} printed="${r.f.referenceRangeRaw?.trim() || "(none)"}"`,
+  },
+  {
+    name: "5. No marker is labRangeSource=hardcoded while its referenceRangeRaw holds one recoverable range",
+    applies: (r) => r.f.labRangeSource === "hardcoded",
+    holds: (r) => !hasRecoverableRange(r.f.referenceRangeRaw),
+    expectation: "hardcoded ⇒ referenceRangeRaw has no single recoverable range",
+    detail: (r) =>
+      `${r.f.canonicalName}: parsed=${JSON.stringify(parseReferenceRange(r.f.referenceRangeRaw ?? ""))} printed="${r.f.referenceRangeRaw?.trim() || "(none)"}"`,
   },
 ];
 
-/** Returns true if any assertion failed. */
-function runClinicalAssertions(runs: SampleRun[]): boolean {
+// Pending: Total T4 is not present in any current sample, so this cannot be
+// exercised yet. It is written as a VACUOUSLY-TRUE structural invariant that
+// stays dormant (0 rows) until a Total-T4 row appears, at which point it
+// EXECUTES and requires the row to match. Documented as unprovable-until-landed
+// rather than silently omitted, so the requirement isn't lost.
+const PENDING_TOTAL_T4: Invariant = {
+  name: "6. [PENDING] Total T4: matched (unprovable until a report containing Total T4 lands)",
+  applies: (r) => r.f.canonicalName === "T4 Total",
+  holds: (r) => r.f.matchStatus === "matched",
+  expectation: "matchStatus=matched",
+  detail: (r) => `match=${r.f.matchStatus} value=${String(r.f.value)}`,
+};
+
+/** Returns true if any invariant failed. Runs against every present report;
+ *  each invariant reports how many rows it checked so a 0-row (dormant) result
+ *  is visible rather than masquerading as a pass. */
+function runStructuralInvariants(results: PdfResult[]): boolean {
   console.log("\n=========================================================");
-  console.log("Clinical assertions (plan §Validation step 2)");
+  console.log("Structural invariants — printed-range extraction on real reports");
   console.log("=========================================================");
 
+  const rows: FlagRow[] = results.flatMap((r) =>
+    r.flagged.map((f) => ({ report: r.label, f })),
+  );
+  console.log(
+    `\n  ${results.length} report(s) present, ${rows.length} flagged marker rows.\n`,
+  );
+
   let anyFailed = false;
-  for (const check of CLINICAL_CHECKS) {
-    const run = runs.find((r) =>
-      check.hints.some((h) => r.label.toLowerCase().includes(h)),
-    );
-    if (!run) {
-      console.log(`\n  ${check.report}`);
-      console.log(`    ⏭  SKIP — report not present (looked for: ${check.hints.join(", ")})`);
+  for (const inv of [...INVARIANTS, PENDING_TOTAL_T4]) {
+    const population = rows.filter((r) => inv.applies(r));
+    const failures = population.filter((r) => !inv.holds(r));
+    const pending = inv === PENDING_TOTAL_T4;
+
+    if (population.length === 0) {
+      const tag = pending ? "⏳ PENDING" : "•  NO ROWS";
+      console.log(`  ${tag} — ${inv.name}`);
+      console.log(
+        `        0 rows in samples/ ${pending ? "(dormant until a Total-T4 report lands)" : "(no applicable markers present)"}`,
+      );
       continue;
     }
-    console.log(`\n  ${check.report}  [${run.label}]`);
-    for (const a of check.assertions) {
-      const marker = run.newFlags.find((f) => f.canonicalName === a.canonical);
-      if (!marker) {
-        anyFailed = true;
-        console.log(
-          `    ✗ FAIL — ${a.canonical}: expected ${a.expectation}, but marker not found in this report`,
-        );
-        continue;
+
+    if (failures.length === 0) {
+      console.log(`  ✓ PASS — ${inv.name}`);
+      console.log(`        ${population.length} row(s) checked; all satisfy: ${inv.expectation}`);
+      for (const r of population) {
+        console.log(`          · ${r.report}: ${inv.detail(r)}`);
       }
-      if (a.expect(marker)) {
-        console.log(
-          `    ✓ PASS — ${a.canonical}: ${a.expectation} (value=${String(marker.value)}, printed="${marker.referenceRangeRaw?.trim() || "(none)"}")`,
-        );
-      } else {
-        anyFailed = true;
-        console.log(
-          `    ✗ FAIL — ${a.canonical}: expected ${a.expectation}, got matchStatus=${marker.matchStatus} flagStatus=${marker.flagStatus} (value=${String(marker.value)})`,
-        );
+    } else {
+      anyFailed = true;
+      console.log(`  ✗ FAIL — ${inv.name}`);
+      console.log(
+        `        ${failures.length}/${population.length} row(s) violate: ${inv.expectation}`,
+      );
+      for (const r of failures) {
+        console.log(`          ✗ ${r.report}: ${inv.detail(r)}`);
       }
     }
+    console.log("");
   }
   return anyFailed;
 }
@@ -478,10 +537,12 @@ async function diffMain() {
   writeDiffMarkdown(rows, present.length, markersCompared);
   console.log(`\n  Full grouped change list written to ${path.relative(process.cwd(), MD_OUT)}`);
 
-  const failed = runClinicalAssertions(runs);
+  const failed = runStructuralInvariants(
+    runs.map((r) => ({ label: r.label, flagged: r.newFlags })),
+  );
   console.log("");
   if (failed) {
-    console.error("Clinical assertions FAILED — see above.\n");
+    console.error("Structural invariants FAILED — see above.\n");
     process.exit(1);
   }
 }
