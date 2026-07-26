@@ -299,18 +299,33 @@ function flagThreeTierBand(
       rec.flagType,
     );
   }
-  const status = bandToStatus(band.label);
-  // bandDirection encodes direction-of-bad. For three_tier_band, flagDirection
-  // is "high" when the value lies in a non-optimal band. The engine does not
-  // distinguish above-vs-below for three-tier markers — the band itself is
-  // the verdict, and bandDirection lets the report explain "high HDL Large
-  // means below the threshold" if needed.
-  const direction: FlagDirection = status === "optimal" ? null : "high";
+  // The band's severity is fixed by the band it fell in; polarity depends on
+  // bandDirection. Compute severity off the raw band verdict first so remapping
+  // the status below (for higher-is-better markers) doesn't lose it.
+  const rawStatus = bandToStatus(band.label);
   const severity: FlagSeverity =
-    status === "optimal" ? "normal" : status === "moderate" ? "moderate" : "severe";
+    rawStatus === "optimal" ? "normal" : rawStatus === "moderate" ? "moderate" : "severe";
+
+  // bandDirection encodes which way is bad. For a higher_is_worse marker, a
+  // non-optimal band means the value is too HIGH. For a higher_is_better marker
+  // (HDL Large, LDL Peak Size, Omega Check), the bands are labelled by risk, so
+  // a non-optimal band means the value sits BELOW the optimal threshold — that
+  // is a LOW result. Flip both the direction and the status so the report reads
+  // ↓ LOW, not ↑ HIGH.
+  let status = rawStatus;
+  let direction: FlagDirection;
+  if (rawStatus === "optimal") {
+    direction = null;
+  } else if (rec.bandDirection === "higher_is_better") {
+    direction = "low";
+    if (status === "high") status = "low";
+  } else {
+    direction = "high";
+  }
+
   const notes = [...extraNotes, `band=${band.label} (compared against three-tier thresholds)`];
   if (rec.bandDirection === "higher_is_better" && status !== "optimal") {
-    notes.push("higher values are healthier for this marker — a 'high' band means value sits below the optimal threshold");
+    notes.push("higher values are healthier for this marker — flagged LOW because the value sits below the optimal threshold");
   }
   return {
     ...m,
