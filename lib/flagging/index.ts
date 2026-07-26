@@ -390,10 +390,17 @@ function applyLabFlagSafetyNet(result: FlaggedMarker): FlaggedMarker {
   const lab = result.labFlagFromPdf;
   if (lab !== "H" && lab !== "L") return result;
 
-  const toolSilent =
-    result.flagStatus === "not_flaggable" ||
-    (result.flagStatus === "optimal" && result.comparedAgainst === "lab");
-  if (!toolSilent) return result;
+  const noRange = result.flagStatus === "not_flaggable";
+  const boundaryTie =
+    result.flagStatus === "optimal" && result.comparedAgainst === "lab";
+  if (!noRange && !boundaryTie) return result;
+
+  // The note must match why we're surfacing the lab flag. For the boundary case
+  // the tool DID have (and used) the lab's range — the value simply tied at the
+  // cutoff — so the "no reference range" wording would be self-contradictory.
+  const note = boundaryTie
+    ? "Value is at the lab's reference cutoff; the lab flagged it — refer to lab report."
+    : "Flagged by the lab; this tool has no reference range for this marker yet — refer to lab report.";
 
   return {
     ...result,
@@ -402,10 +409,7 @@ function applyLabFlagSafetyNet(result: FlaggedMarker): FlaggedMarker {
     flagSeverity: "moderate",
     comparedAgainst: "lab",
     labFlagFallback: true,
-    flagNotes: [
-      ...result.flagNotes,
-      "Flagged by the lab; this tool has no reference range for this marker yet — refer to lab report.",
-    ],
+    flagNotes: [...result.flagNotes, note],
   };
 }
 

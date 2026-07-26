@@ -52,6 +52,58 @@ function check(
   }
 }
 
+/** Assert the lab-flag safety net surfaces `value` as `dir` with a note that
+ *  contains `noteIncludes` and NOT `noteExcludes`. */
+function checkSafetyNet(
+  label: string,
+  m: MatchedMarker,
+  dir: "high" | "low",
+  noteIncludes: string,
+  noteExcludes: string,
+) {
+  const f = flagMarker(m);
+  const joined = f.flagNotes.join(" ");
+  try {
+    assert.equal(f.labFlagFallback, true, "labFlagFallback");
+    assert.equal(f.flagStatus, dir, "flagStatus");
+    assert.equal(f.flagDirection, dir, "flagDirection");
+    assert.ok(joined.includes(noteIncludes), `note should include "${noteIncludes}"`);
+    assert.ok(!joined.includes(noteExcludes), `note should NOT include "${noteExcludes}"`);
+    passed++;
+  } catch (e) {
+    failures.push(`  ✗ ${label}\n      ${(e as Error).message}\n      notes: ${joined}`);
+  }
+}
+
+// ----- Lab-flag safety net note is conditional -----
+// Boundary case: a MATCHED lab_range_only marker that ties at the lab's cutoff
+// (Chol/HDL 5.0 vs "<5.0") — tool DID have the range, so the note must NOT say
+// "no reference range".
+checkSafetyNet(
+  "safety net boundary tie → 'at the lab's reference cutoff' note",
+  {
+    ...matched("Cholesterol/HDL Ratio", 5),
+    labFlagFromPdf: "H",
+    referenceRangeRaw: "<5.0",
+  },
+  "high",
+  "at the lab's reference cutoff",
+  "no reference range",
+);
+// Genuinely unmatched marker: keep the original "no reference range" wording.
+checkSafetyNet(
+  "safety net unmatched marker → 'no reference range' note",
+  {
+    ...matched("", 999),
+    rawName: "SOME UNKNOWN ANALYTE",
+    labFlagFromPdf: "L",
+    matchStatus: "unmatched",
+  },
+  "low",
+  "no reference range",
+  "at the lab's reference cutoff",
+);
+
 // ----- higher_is_better (HDL Large: bands High<5353 / Moderate 5353-6729 /
 // Optimal>=6729). A below-threshold value is LOW, not high. -----
 check("higher_is_better below-threshold (abnormal band) → LOW", "HDL Large", 5042, {
