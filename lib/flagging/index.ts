@@ -360,15 +360,25 @@ function flagCategorical(
 
 /** Safety net for lab-flagged markers the tool can't flag itself.
  *
- *  If the normal logic came back not_flaggable (marker unmatched, or matched
- *  but with no usable reference range) BUT the lab printed an H/L flag next to
- *  the value, we must NOT stay silent: surface it using the lab's own flag so
- *  it can never be quietly dropped. Never touches a marker the tool already
- *  flagged (or judged optimal/informational) on its own. */
+ *  If the lab printed an H/L flag next to the value but the tool went silent
+ *  relative to that flag, we must NOT quietly drop it — surface it using the
+ *  lab's own flag. "Went silent" means one of:
+ *    - not_flaggable: marker unmatched, or matched with no usable range; or
+ *    - optimal against the lab's OWN printed range (comparedAgainst "lab"): the
+ *      tool compared against the same range the lab did and still called it
+ *      in-range, so a lab H/L is a boundary/rounding disagreement (e.g. a value
+ *      of 5.0 against an exclusive "<5.0") where the lab is authoritative.
+ *  Never touches a marker the tool actually flagged itself (high/low/moderate/
+ *  out_of_range), nor an optimal judged against Melissa's optimal range
+ *  (comparedAgainst "optimal") or a categorical expected value. */
 function applyLabFlagSafetyNet(result: FlaggedMarker): FlaggedMarker {
-  if (result.flagStatus !== "not_flaggable") return result;
   const lab = result.labFlagFromPdf;
   if (lab !== "H" && lab !== "L") return result;
+
+  const toolSilent =
+    result.flagStatus === "not_flaggable" ||
+    (result.flagStatus === "optimal" && result.comparedAgainst === "lab");
+  if (!toolSilent) return result;
 
   return {
     ...result,
