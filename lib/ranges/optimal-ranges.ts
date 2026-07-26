@@ -293,6 +293,111 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     increaseCauses: [],
     decreaseCauses: [],
   },
+  absolute_neutrophils: {
+    canonicalName: "Absolute Neutrophils",
+    aliases: [
+      "ABSOLUTE NEUTROPHILS",
+      "Absolute Neutrophils",
+      "Neutrophils, Absolute",
+      "Neutrophils (Absolute)",
+      "absolute neutrophils",
+    ],
+    unit: "cells/uL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "hematology",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
+  },
+  absolute_lymphocytes: {
+    canonicalName: "Absolute Lymphocytes",
+    aliases: [
+      "ABSOLUTE LYMPHOCYTES",
+      "Absolute Lymphocytes",
+      "Lymphocytes, Absolute",
+      "Lymphocytes (Absolute)",
+      "absolute lymphocytes",
+    ],
+    unit: "cells/uL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "hematology",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
+  },
+  absolute_monocytes: {
+    canonicalName: "Absolute Monocytes",
+    aliases: [
+      "ABSOLUTE MONOCYTES",
+      "Absolute Monocytes",
+      "Monocytes, Absolute",
+      "Monocytes (Absolute)",
+      "absolute monocytes",
+    ],
+    unit: "cells/uL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "hematology",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
+  },
+  absolute_eosinophils: {
+    canonicalName: "Absolute Eosinophils",
+    aliases: [
+      "ABSOLUTE EOSINOPHILS",
+      "Absolute Eosinophils",
+      "Eosinophils, Absolute",
+      "Eosinophils (Absolute)",
+      "absolute eosinophils",
+    ],
+    unit: "cells/uL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "hematology",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
+  },
+  absolute_basophils: {
+    canonicalName: "Absolute Basophils",
+    aliases: [
+      "ABSOLUTE BASOPHILS",
+      "Absolute Basophils",
+      "Basophils, Absolute",
+      "Basophils (Absolute)",
+      "absolute basophils",
+    ],
+    unit: "cells/uL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "hematology",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
+  },
   wbc_white_blood_cell: {
     canonicalName: "WBC (White Blood Cell)",
     aliases: [
@@ -1216,6 +1321,53 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "Diabetes",
       "Dysinsulinism (metabolic syndrome)",
     ],
+  },
+  non_hdl_cholesterol: {
+    canonicalName: "Non-HDL Cholesterol",
+    aliases: [
+      "NON HDL CHOLESTEROL",
+      "NON-HDL CHOLESTEROL",
+      "Non HDL Cholesterol",
+      "Non-HDL Cholesterol",
+      "Non-HDL Cholesterol (calc)",
+      "non hdl cholesterol",
+      "non-hdl cholesterol",
+    ],
+    unit: "mg/dL",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "lipid",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
+  },
+  cholesterol_hdl_ratio: {
+    canonicalName: "Cholesterol/HDL Ratio",
+    aliases: [
+      "CHOL/HDLC RATIO",
+      "CHOL/HDL RATIO",
+      "Chol/HDL Ratio",
+      "Chol/HDLc Ratio",
+      "Cholesterol/HDL Ratio",
+      "Total Cholesterol/HDL Ratio",
+      "chol/hdlc ratio",
+      "cholesterol/hdl ratio",
+    ],
+    unit: "",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "lipid",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
   },
   hemoglobin_a1c: {
     canonicalName: "Hemoglobin A1C",
@@ -2358,7 +2510,11 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   amh: {
     canonicalName: "AMH (Anti-Mullerian Hormone)",
     aliases: [
+      "(AMH), FEMALE",
+      "(AMH), MALE",
       "AMH",
+      "AMH, FEMALE",
+      "AMH, MALE",
       "ANTI-MULLERIAN HORMONE",
       "ANTI-MULLERIAN HORMONE (AMH)",
       "ANTI-MULLERIAN HORMONE (AMH), FEMALE",
@@ -2602,6 +2758,30 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     increaseCauses: [],
     decreaseCauses: [],
     notes: "Per Melissa: refer to lab report — no fixed range supplied.",
+  },
+  omega_3_index: {
+    canonicalName: "Omega-3 Index (EPA+DPA+DHA)",
+    aliases: [
+      "EPA+DPA+DHA",
+      "EPA + DPA + DHA",
+      "EPA+DPA+DHA (Omega-3 Index)",
+      "OMEGA-3 INDEX",
+      "Omega-3 Index",
+      "Omega 3 Index",
+      "epa+dpa+dha",
+      "omega-3 index",
+    ],
+    unit: "%",
+    labRange: { min: null, max: null },
+    optimalRange: { min: null, max: null },
+    flagType: "lab_range_only",
+    confirmationSource:
+      "added for lab-flag coverage; flags against printed range pending Melissa's optimal ranges",
+    category: "lipid",
+    increaseCauses: [],
+    decreaseCauses: [],
+    notes:
+      "Added for lab-flag coverage — flags against the report's printed reference range. TODO: clinical narrative + Melissa's optimal range.",
   },
   omega_6_3_ratio: {
     canonicalName: "Omega-6/Omega-3 Ratio",
