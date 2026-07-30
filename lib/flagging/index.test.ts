@@ -104,6 +104,82 @@ checkSafetyNet(
   "at the lab's reference cutoff",
 );
 
+// ----- Magnesium RBC: per-lab scales, printed range must drive -----
+// Melissa confirmed (2026) RBC magnesium is reported on different scales per
+// lab: Functional Health 1.5-2.5 mg/dL, Quest 4.0-6.4 mg/dL. The record carries
+// NO hardcoded fallback, so the SAME value must flag differently depending on
+// which lab's range the report printed.
+function checkPrinted(
+  label: string,
+  canonicalName: string,
+  value: number,
+  referenceRangeRaw: string,
+  expect: { flagStatus: string; flagDirection: string | null },
+) {
+  const f = flagMarker({ ...matched(canonicalName, value), referenceRangeRaw });
+  try {
+    assert.equal(f.flagStatus, expect.flagStatus, "flagStatus");
+    assert.equal(f.flagDirection, expect.flagDirection, "flagDirection");
+    assert.equal(f.labRangeSource, "printed", "labRangeSource");
+    passed++;
+  } catch (e) {
+    failures.push(
+      `  ✗ ${label} — ${canonicalName} @ ${value} vs printed "${referenceRangeRaw}"\n` +
+        `      expected status=${expect.flagStatus} dir=${expect.flagDirection}\n` +
+        `      got      status=${f.flagStatus} dir=${f.flagDirection} src=${f.labRangeSource} (${(e as Error).message})`,
+    );
+  }
+}
+checkPrinted(
+  "Magnesium RBC 2.0 on Functional Health scale (1.5-2.5) → OPTIMAL",
+  "Magnesium RBC",
+  2.0,
+  "1.5-2.5",
+  { flagStatus: "optimal", flagDirection: null },
+);
+checkPrinted(
+  "Magnesium RBC 2.0 on Quest scale (4.0-6.4) → LOW",
+  "Magnesium RBC",
+  2.0,
+  "4.0-6.4",
+  { flagStatus: "low", flagDirection: "low" },
+);
+// SW1's real value: still high against the range Quest printed on that report.
+checkPrinted(
+  "Magnesium RBC 7.0 (SW1) vs printed 4.0-6.4 → HIGH",
+  "Magnesium RBC",
+  7.0,
+  "4.0-6.4",
+  { flagStatus: "high", flagDirection: "high" },
+);
+// No printed range → no hardcoded scale may be substituted. The marker goes
+// not_flaggable (report says "refer to lab report"), and the lab-flag safety
+// net is what surfaces it when the lab itself flagged the value.
+(() => {
+  const f = flagMarker(matched("Magnesium RBC", 2.0));
+  try {
+    assert.equal(f.flagStatus, "not_flaggable", "flagStatus");
+    assert.equal(f.effectiveLabRange?.min, null, "effectiveLabRange.min");
+    assert.equal(f.effectiveLabRange?.max, null, "effectiveLabRange.max");
+    passed++;
+  } catch (e) {
+    failures.push(
+      `  ✗ Magnesium RBC with no printed range → not_flaggable (no hardcoded scale)\n` +
+        `      got status=${f.flagStatus} eff=${JSON.stringify(f.effectiveLabRange)} (${(e as Error).message})`,
+    );
+  }
+})();
+checkSafetyNet(
+  "Magnesium RBC lab-flagged with no printed range → surfaced via safety net",
+  {
+    ...matched("Magnesium RBC", 7),
+    labFlagFromPdf: "H",
+  },
+  "high",
+  "no reference range",
+  "at the lab's reference cutoff",
+);
+
 // ----- higher_is_better (HDL Large: bands High<5353 / Moderate 5353-6729 /
 // Optimal>=6729). A below-threshold value is LOW, not high. -----
 check("higher_is_better below-threshold (abnormal band) → LOW", "HDL Large", 5042, {

@@ -3178,20 +3178,26 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
       "rbc magnesium",
     ],
     unit: "mg/dL",
-    // Corrected 2026-07-21: previously carried {1.5, 2.5}, which is the SERUM
-    // magnesium range — wrong for an RBC (intracellular) magnesium measure and
-    // caused false "high" flags on every real report (values ~5 mg/dL). Now the
-    // standard adult RBC magnesium reference range, matching the range Quest
-    // prints on these reports (4.0-6.4 mg/dL). Fallback used only when a report
-    // doesn't print its own range; a printed range still wins (step 1).
-    labRange: { min: 4.0, max: 6.4 },
+    // NO hardcoded fallback — deliberately {null, null}. Melissa confirmed (2026)
+    // that RBC magnesium is reported on DIFFERENT scales per lab: Functional
+    // Health uses 1.5-2.5 mg/dL, Quest uses 4.0-6.4 mg/dL. Any single hardcoded
+    // fallback is therefore unsafe across labs — carrying Quest's 4.0-6.4 would
+    // mis-flag a perfectly normal Functional Health value (~2.0) as LOW on any
+    // report whose printed range failed to parse, and the earlier 1.5-2.5 did
+    // the mirror-image damage (false HIGH on every Quest report, ~5 mg/dL).
+    // With {null, null} the printed range always drives (step 1) and no
+    // lab-specific scale can leak across labs. When no range parses, the marker
+    // is not_flaggable and the report says "refer to lab report for reference
+    // range"; the lab-flag safety net still surfaces any value the lab itself
+    // flagged H/L, so the tool never goes silent on an abnormal result.
+    labRange: { min: null, max: null },
     optimalRange: { min: null, max: null },
     flagType: "lab_range_only",
-    confirmationSource: "Quest Diagnostics RBC magnesium reference range (4.0-6.4 mg/dL), as printed on sample reports; supersedes prior serum-range value pending Melissa confirmation",
+    confirmationSource: "Melissa 2026: RBC magnesium scales differ by lab — Functional Health 1.5-2.5 mg/dL, Quest 4.0-6.4 mg/dL. No single fallback is safe, so the printed range on each report is the only source.",
     category: "vitamins_minerals",
     increaseCauses: [],
     decreaseCauses: [],
-    notes: "Standard adult RBC (intracellular) magnesium reference range, distinct from serum magnesium (~1.5-2.5 mg/dL). Previously mislabeled with the serum range.",
+    notes: "Per-lab scales differ (Melissa-confirmed 2026): Functional Health 1.5-2.5 mg/dL, Quest 4.0-6.4 mg/dL — both are valid RBC (intracellular) magnesium ranges on their own lab's scale, and both differ from serum magnesium. No hardcoded fallback is carried because either value would mis-flag reports from the other lab; the range printed on the report drives the flag.",
   },
 
   // ----- Urinalysis (lab_range_only — ranges from Quest report) -----
