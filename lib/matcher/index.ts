@@ -13,6 +13,7 @@
  */
 
 import type { ParsedMarker } from "../parsers/types";
+import { parseReferenceRange } from "../flagging/range-parse";
 import { OPTIMAL_RANGES, findMarker, type MarkerRange } from "../ranges/optimal-ranges";
 import {
   fuzzyThreshold,
@@ -239,6 +240,115 @@ function buildOptimalRange(
   return { min, max, unit: rec.unit };
 }
 
+// ----- post-match de-dupe -----
+
+/** Canonical records that legitimately carry MULTIPLE distinct rows on one
+ *  report, so same-canonical rows must NEVER be collapsed even when their
+ *  values happen to coincide.
+ *
+ *  MTHFR is the live case: C677T and A1298C are clinically different variants
+ *  that both resolve to the shared "MTHFR" record (see the TODO on that record
+ *  in optimal-ranges.ts). Two variant rows frequently report the SAME genotype
+ *  string ("Heterozygous", "Not Detected"), so the same-value rule below is not
+ *  enough on its own to protect them — losing one would drop a real result. */
+const NEVER_COLLAPSE: ReadonlySet<string> = new Set(["MTHFR"]);
+
+/** Comparison key for a marker value. Numeric values compare numerically
+ *  (2.57 === "2.57"), everything else as trimmed, case-folded text. Returns
+ *  null for a blank value — blanks never count as "the same value". */
+function valueKey(v: number | string): string | null {
+  if (typeof v === "number") return Number.isFinite(v) ? `n:${v}` : null;
+  const trimmed = v.trim();
+  if (!trimmed) return null;
+  const n = Number.parseFloat(trimmed);
+  if (Number.isFinite(n) && String(n) === trimmed) return `n:${n}`;
+  return `s:${trimmed.toLowerCase()}`;
+}
+
+/** Units are "compatible" when they agree, or when at least one is blank (the
+ *  parser leaves the unit off some wrapped rows). Two rows carrying DIFFERENT
+ *  non-blank units are different measurements — never collapse those. */
+function unitsCompatible(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase();
+  const y = b.trim().toLowerCase();
+  if (!x || !y) return true;
+  return x === y;
+}
+
+function hasParseableRange(raw: string): boolean {
+  if (!raw.trim()) return false;
+  const p = parseReferenceRange(raw);
+  return p.min !== null || p.max !== null;
+}
+
+/** Collapse matched rows that are the same result printed twice.
+ *
+ *  Why this is needed: the body/appendix collapse in `groupByRawName` is keyed
+ *  on rawName, so it only catches a repeat that prints the marker name
+ *  IDENTICALLY in both places. Function reports wrap long names, and the body
+ *  and appendix keep different halves — "ANTI-MULLERIAN HORMONE (AMH), FEMALE"
+ *  in one, "(AMH), FEMALE" in the other. Both resolve to canonical AMH, so the
+ *  report rendered the same result as two rows.
+ *
+ *  The collapse is deliberately narrow: same canonicalName AND same value AND
+ *  compatible units. Same-canonical rows with DIFFERENT values are always kept
+ *  — they are distinct results, not a duplicate (MTHFR C677T vs A1298C), and
+ *  NEVER_COLLAPSE additionally protects records whose rows stay distinct even
+ *  at equal values. */
+function dedupeMatched(rows: MatchedMarker[]): MatchedMarker[] {
+  const out: MatchedMarker[] = [];
+  // key → index into `out` of the row we're keeping for that key.
+  const keptIndexByKey = new Map<string, number>();
+
+  for (const row of rows) {
+    const vKey = row.matchStatus === "matched" ? valueKey(row.value) : null;
+    if (vKey === null || NEVER_COLLAPSE.has(row.canonicalName)) {
+      out.push(row);
+      continue;
+    }
+    const key = `${row.canonicalName} ${vKey}`;
+    const priorIndex = keptIndexByKey.get(key);
+    if (priorIndex === undefined) {
+      keptIndexByKey.set(key, out.length);
+      out.push(row);
+      continue;
+    }
+
+    const prior = out[priorIndex];
+    if (!unitsCompatible(prior.unit, row.unit)) {
+      out.push(row);
+      continue;
+    }
+
+    // Duplicate confirmed. Keep whichever row came from the body; on a tie the
+    // earlier row wins (body sections precede the appendix in every report).
+    const keepPrior = prior.source === "body" || row.source !== "body";
+    const winner = keepPrior ? prior : row;
+    const loser = keepPrior ? row : prior;
+
+    // Backfill anything the winner is missing but the loser has: a usable
+    // printed range, a unit, and — safety-critical — the lab's own H/L flag.
+    const referenceRangeRaw =
+      hasParseableRange(winner.referenceRangeRaw) || !hasParseableRange(loser.referenceRangeRaw)
+        ? winner.referenceRangeRaw
+        : loser.referenceRangeRaw;
+
+    out[priorIndex] = {
+      ...winner,
+      unit: winner.unit.trim() ? winner.unit : loser.unit,
+      referenceRangeRaw,
+      labFlagFromPdf: winner.labFlagFromPdf ?? loser.labFlagFromPdf,
+      notes: [
+        ...winner.notes,
+        ...loser.notes.filter((n) => !winner.notes.includes(n)),
+        `duplicate row collapsed: same canonical marker and value also printed as "${loser.rawName}" (${loser.source})`,
+      ],
+    };
+  }
+
+  return out;
+}
+
 export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
   const out: MatchedMarker[] = [];
   const groups = groupByRawName(markers);
@@ -339,5 +449,5 @@ export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
     });
   }
 
-  return out;
+  return dedupeMatched(out);
 }
