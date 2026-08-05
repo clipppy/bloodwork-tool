@@ -25,9 +25,11 @@ function Write-ErrLog([string]$message) {
     Add-Content -Path $logErr -Value "[$stamp] Start-BloodworkTool: $message"
 }
 
-# 1. The repo folder must exist where we expect it.
-if (-not (Test-Path -LiteralPath $repo)) {
-    Write-ErrLog "Repo folder not found at '$repo'. Clone it there (Phase C of windows-install.md), then restart the task."
+# 1. Sanity-check that we resolved to an actual repo root (contains package.json).
+#    With $repo derived from $PSScriptRoot this only fails if this script was moved
+#    out of <repo>\scripts\install\.
+if (-not (Test-Path -LiteralPath (Join-Path $repo 'package.json'))) {
+    Write-ErrLog "Resolved repo root '$repo' has no package.json — Start-BloodworkTool.ps1 must live in <repo>\scripts\install\. Restore it there and restart the task."
     exit 1
 }
 
