@@ -393,58 +393,46 @@ state" (see Troubleshooting), the script prints a clear remediation line telling
 you to re-register the task via the **Phase E** block, instead of failing
 silently.
 
-### Before you update: confirm where the repo actually lives
+### Before you update: find where the tool is installed
 
-**The one-click updater only works if the repo is at the standard path
-`Documents\bloodwork-tool`.** The auto-start wrapper (`Start-BloodworkTool.ps1`)
-and the scheduled task both expect it there. If an earlier install put the repo
-somewhere else — e.g. `bloodwork-tool-new` in the user profile root, or on the
-Desktop — the update will **pull fine but the tool won't restart afterward**,
-because the restart looks in `Documents\bloodwork-tool` and finds nothing. That
-failure looks exactly like "the update broke the tool." So check the real
-location first:
+The tool runs from **whatever local folder it was installed into** — it does
+**not** have to be `Documents\bloodwork-tool`. The scripts resolve their own
+location, so the tool and the updater work from wherever the repo lives.
+
+> **Avoid OneDrive.** On Windows 11, `Documents` is often redirected into
+> **OneDrive**, whose background sync conflicts with git and with the running dev
+> server. Keep the install on a **plain local path that isn't synced** — e.g.
+> `%USERPROFILE%\bloodwork-tool` (the user profile root). A past install landing
+> in a OneDrive-synced `Documents` is a common cause of update failures.
+
+Find the current install:
 
 ```powershell
 (Get-ScheduledTask -TaskName BloodworkTool -ErrorAction SilentlyContinue).Actions |
   Format-List Execute, Arguments
-
-Get-ChildItem $env:USERPROFILE, $env:USERPROFILE\Desktop, $env:USERPROFILE\Documents -Directory -ErrorAction SilentlyContinue |
+Get-ChildItem $env:USERPROFILE, $env:USERPROFILE\Desktop -Directory -ErrorAction SilentlyContinue |
   Where-Object { Test-Path (Join-Path $_.FullName '.git') } |
   ForEach-Object { $_.FullName }
 ```
 
-- Already at `…\Documents\bloodwork-tool` → use the one-click updater above.
-- Anywhere else → **standardize it first** (next section); after that, updates
-  work reliably forever.
+### Updating the existing install in place (recommended)
 
-### Migrating a nonstandard install to the standard path
-
-Do this once to move an existing install to `Documents\bloodwork-tool` so every
-script agrees. It preserves the local database (`prisma\dev.db`).
+The safest update pulls the latest code **directly into the folder that already
+works** — no moving, no re-cloning:
 
 ```powershell
-Stop-ScheduledTask -TaskName BloodworkTool -ErrorAction SilentlyContinue
-Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue |
-  Select-Object -Expand OwningProcess -Unique |
-  ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
-
-$old = Join-Path $env:USERPROFILE 'bloodwork-tool-new'     # <-- edit to the real path
-$new = Join-Path $env:USERPROFILE 'Documents\bloodwork-tool'
-
-cd $env:USERPROFILE\Documents
-git clone https://github.com/clipppy/bloodwork-tool.git
-
-if (Test-Path (Join-Path $old 'prisma\dev.db')) {
-    Copy-Item (Join-Path $old 'prisma\dev.db') (Join-Path $new 'prisma\dev.db') -Force
-}
-
-cd $new
+cd "<the working folder from above>"
+git remote -v
+git fetch origin
+git reset --hard origin/main
+git rev-parse --short HEAD
 npm install
-# Re-run the Phase E Register-ScheduledTask block, then verify with Phase F.
-Rename-Item $old ($old + '.retired')
+Stop-ScheduledTask -TaskName BloodworkTool; Start-ScheduledTask -TaskName BloodworkTool
 ```
 
-After this, `Update-BloodworkTool.cmd` works normally on every future update.
+Then open http://localhost:3000 and confirm. The one-click Update-BloodworkTool.cmd
+does these same steps; the manual sequence is the reliable fallback and works
+regardless of where the repo is installed.
 
 ---
 

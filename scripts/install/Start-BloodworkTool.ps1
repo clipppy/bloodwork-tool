@@ -11,7 +11,12 @@
 #   %TEMP%\bloodwork-tool.log        (normal output)
 #   %TEMP%\bloodwork-tool.error.log  (errors)
 
-$repo   = Join-Path $env:USERPROFILE 'Documents\bloodwork-tool'
+# Resolve the repo from THIS script's own location (it lives at
+# <repo>\scripts\install\Start-BloodworkTool.ps1, so the repo root is two levels
+# up). This makes the tool run from wherever it's actually installed instead of a
+# hard-coded Documents path — matching how Update-BloodworkTool.ps1 already
+# resolves the repo, and sidestepping OneDrive-synced Documents folders entirely.
+$repo   = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $logOut = Join-Path $env:TEMP 'bloodwork-tool.log'
 $logErr = Join-Path $env:TEMP 'bloodwork-tool.error.log'
 
