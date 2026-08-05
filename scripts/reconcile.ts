@@ -24,6 +24,7 @@ import * as path from "node:path";
 import { parseQuestPdf } from "../lib/parsers/quest";
 import { matchMarkers } from "../lib/matcher";
 import { flagMarkers, type FlaggedMarker, type FlagStatus } from "../lib/flagging";
+import { findSamplePdfs } from "./sample-pdfs";
 
 // Tool statuses that mean "the tool did NOT raise a concern" (in-range).
 const TOOL_IN_RANGE: ReadonlySet<FlagStatus> = new Set<FlagStatus>([
@@ -38,21 +39,6 @@ const TOOL_FLAGGED: ReadonlySet<FlagStatus> = new Set<FlagStatus>([
   "low",
   "out_of_range",
 ]);
-
-/** Recursively collect every *.pdf under samples/. */
-function findSamplePdfs(root: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string) => {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full);
-      else if (entry.isFile() && entry.name.toLowerCase().endsWith(".pdf")) out.push(full);
-    }
-  };
-  walk(root);
-  return out.sort();
-}
 
 /** A value the lab could have flagged H/L: a real number, or a string that
  *  begins with a (optionally comparator-prefixed) digit ("<10", ">600.00"). */

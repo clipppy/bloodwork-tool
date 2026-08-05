@@ -25,15 +25,12 @@ import { matchMarkers } from "../lib/matcher";
 import { flagMarkers, type FlaggedMarker } from "../lib/flagging";
 import { parseReferenceRange } from "../lib/flagging/range-parse";
 import { OPTIMAL_RANGES, findMarker } from "../lib/ranges/optimal-ranges";
+import { findSamplePdfs } from "./sample-pdfs";
 
-const SAMPLES = [
-  "samples/function/Lab Results of Record GC.pdf",
-  "samples/function/Lab Results of Record SW1.pdf",
-  "samples/function/Lab Results of Record SW2.pdf",
-  "samples/function/Lab Results of Record TM.pdf",
-  "samples/function/Lab Results of Record TM2.pdf",
-  "samples/quest/Quanum Lab Services Manager.pdf",
-];
+// Discovered dynamically (same walk reconcile.ts uses) so a sample that is added
+// or renamed can never be silently skipped by half the backtest, and a missing
+// file can never throw ENOENT.
+const SAMPLES = findSamplePdfs("samples");
 
 const SENTINELS = ["ANA (Anti-nuclear Antibodies)", "Uric Acid", "Cortisol", "Estrogens"];
 
@@ -66,6 +63,11 @@ function fmtCounts(flagged: FlaggedMarker[]): string {
 }
 
 async function main() {
+  if (SAMPLES.length === 0) {
+    console.log("\nNo PDFs found under samples/. Nothing to validate.\n");
+    return;
+  }
+
   const results: PdfResult[] = [];
   for (const p of SAMPLES) {
     results.push(await runOne(p));
@@ -463,7 +465,8 @@ async function diffMain() {
   console.log("Before/after flag diff — old hardcoded labRange vs printed range");
   console.log("=========================================================");
 
-  const present = SAMPLES.filter((p) => fs.existsSync(p));
+  // Discovery only returns files that exist, so no existsSync filter is needed.
+  const present = SAMPLES;
   if (present.length === 0) {
     console.log("\n  no samples present (samples/ is empty) — nothing to compare.\n");
     return;
