@@ -434,6 +434,33 @@ Then open http://localhost:3000 and confirm. The one-click Update-BloodworkTool.
 does these same steps; the manual sequence is the reliable fallback and works
 regardless of where the repo is installed.
 
+### Set up a desktop update shortcut (one-time)
+
+The updater is `scripts\install\Update-BloodworkTool.cmd` inside the repo — it
+ships with the tool, there's nothing separate to install. To give the practice a
+one-click "button," drop a shortcut to it on the desktop. Run this once, with
+`$repo` set to the install folder you located above:
+
+```powershell
+$repo = "<the working folder>"        # the path from the locate step
+$cmd  = Join-Path $repo 'scripts\install\Update-BloodworkTool.cmd'
+$desktop = [Environment]::GetFolderPath('Desktop')
+$sc = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $desktop 'Update Bloodwork Tool.lnk'))
+$sc.TargetPath = $cmd
+$sc.WorkingDirectory = Split-Path $cmd
+$sc.Save()
+```
+
+Double-click the new **Update Bloodwork Tool** shortcut once to test it — a
+successful run ends with a green `SUCCESS … Now at commit …` line. Because the
+shortcut targets the `.cmd` inside the actual repo, the folder's name and location
+don't matter.
+
+> For the button to run without prompting later, the machine needs **saved git
+> credentials** — the one-click `git fetch` hits the private repo. When you first
+> authenticate with a token, let Windows store it (Git Credential Manager) so
+> future clicks don't ask Melissa to sign in.
+
 ---
 
 # Troubleshooting
