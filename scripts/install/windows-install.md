@@ -393,6 +393,59 @@ state" (see Troubleshooting), the script prints a clear remediation line telling
 you to re-register the task via the **Phase E** block, instead of failing
 silently.
 
+### Before you update: confirm where the repo actually lives
+
+**The one-click updater only works if the repo is at the standard path
+`Documents\bloodwork-tool`.** The auto-start wrapper (`Start-BloodworkTool.ps1`)
+and the scheduled task both expect it there. If an earlier install put the repo
+somewhere else — e.g. `bloodwork-tool-new` in the user profile root, or on the
+Desktop — the update will **pull fine but the tool won't restart afterward**,
+because the restart looks in `Documents\bloodwork-tool` and finds nothing. That
+failure looks exactly like "the update broke the tool." So check the real
+location first:
+
+```powershell
+(Get-ScheduledTask -TaskName BloodworkTool -ErrorAction SilentlyContinue).Actions |
+  Format-List Execute, Arguments
+
+Get-ChildItem $env:USERPROFILE, $env:USERPROFILE\Desktop, $env:USERPROFILE\Documents -Directory -ErrorAction SilentlyContinue |
+  Where-Object { Test-Path (Join-Path $_.FullName '.git') } |
+  ForEach-Object { $_.FullName }
+```
+
+- Already at `…\Documents\bloodwork-tool` → use the one-click updater above.
+- Anywhere else → **standardize it first** (next section); after that, updates
+  work reliably forever.
+
+### Migrating a nonstandard install to the standard path
+
+Do this once to move an existing install to `Documents\bloodwork-tool` so every
+script agrees. It preserves the local database (`prisma\dev.db`).
+
+```powershell
+Stop-ScheduledTask -TaskName BloodworkTool -ErrorAction SilentlyContinue
+Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue |
+  Select-Object -Expand OwningProcess -Unique |
+  ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+
+$old = Join-Path $env:USERPROFILE 'bloodwork-tool-new'     # <-- edit to the real path
+$new = Join-Path $env:USERPROFILE 'Documents\bloodwork-tool'
+
+cd $env:USERPROFILE\Documents
+git clone https://github.com/clipppy/bloodwork-tool.git
+
+if (Test-Path (Join-Path $old 'prisma\dev.db')) {
+    Copy-Item (Join-Path $old 'prisma\dev.db') (Join-Path $new 'prisma\dev.db') -Force
+}
+
+cd $new
+npm install
+# Re-run the Phase E Register-ScheduledTask block, then verify with Phase F.
+Rename-Item $old ($old + '.retired')
+```
+
+After this, `Update-BloodworkTool.cmd` works normally on every future update.
+
 ---
 
 # Troubleshooting
