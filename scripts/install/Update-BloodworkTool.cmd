@@ -1,5 +1,5 @@
 @echo off
-REM Update-BloodworkTool.cmd — double-click this to update the Bloodwork Tool.
+REM Update-BloodworkTool.cmd - double-click this to update the Bloodwork Tool.
 REM It just runs Update-BloodworkTool.ps1 with an execution policy that lets it
 REM run, so the practice never has to touch PowerShell. The -NoProfile / -Bypass
 REM flags mean this works even if the machine has never set an execution policy.
