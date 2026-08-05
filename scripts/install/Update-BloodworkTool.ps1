@@ -10,10 +10,10 @@
 #   scripts/install/windows-install.md  (see "Updating the tool")
 #
 # The start flow runs the UI in DEV mode (`npm run ui` -> `next dev`), so there
-# is NO production build step to run here — see Step 6.
+# is NO production build step to run here - see Step 6.
 #
 # Every step is echoed (timestamped) and also appended to:
-#   update-log.txt  (next to this script) — send this file to Clay if it fails.
+#   update-log.txt  (next to this script) - send this file to Clay if it fails.
 
 $ErrorActionPreference = 'Stop'
 
@@ -53,7 +53,7 @@ try {
     Log "STEP $step"
     $repo = (Resolve-Path (Join-Path $scriptDir '..\..')).Path
     if (-not (Test-Path -LiteralPath (Join-Path $repo 'package.json'))) {
-        throw "No package.json at '$repo' — this script must live in <repo>\scripts\install\."
+        throw "No package.json at '$repo' - this script must live in <repo>\scripts\install\."
     }
     Log "  Repo: $repo"
     Set-Location -LiteralPath $repo
@@ -68,7 +68,7 @@ try {
 
     # ---- Step 3: stop the running tool (same mechanism as Start) ----
     # Start runs via the "BloodworkTool" scheduled task, so we stop the task.
-    # A known failure mode is the task being in a "confused state" — catch it,
+    # A known failure mode is the task being in a "confused state" - catch it,
     # print remediation, and carry on (freeing the port below still works).
     $step = '3/8 stop the tool'
     Log "STEP $step : Stop-ScheduledTask '$TaskName'"
@@ -126,12 +126,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed (exit $LASTEXITCODE)." }
     Log "  Dependencies installed."
 
-    # ---- Step 6: build — SKIPPED ----
+    # ---- Step 6: build - SKIPPED ----
     # The start flow runs the UI in DEV mode (`npm run ui` -> `next dev`), which
     # compiles on demand. There is no production `next build`/`next start` in the
     # start path, so there is nothing to build here. (If the start flow ever
     # switches to a production build, add `& $npm.Source run build` here.)
-    $step = '6/8 build (skipped — dev mode)'
+    $step = '6/8 build (skipped - dev mode)'
     Log "STEP $step : skipped; the tool runs via 'npm run ui' (next dev)."
 
     # ---- Step 7: restart the tool (same mechanism as Start) ----
@@ -148,7 +148,7 @@ try {
         Log "  then double-click Update-BloodworkTool.cmd again."
     }
 
-    # ---- Step 8: health check — poll localhost:3000 for up to ~30s ----
+    # ---- Step 8: health check - poll localhost:3000 for up to ~30s ----
     $step = '8/8 health check'
     Log "STEP $step : polling http://localhost:3000 (up to ~30s)"
     $isUp = $false
@@ -164,13 +164,13 @@ try {
     }
 
     if ($isUp) {
-        Log "RESULT: localhost:3000 UP — update complete at commit $hash."
+        Log "RESULT: localhost:3000 UP - update complete at commit $hash."
         Write-Host ''
         Write-Host '  SUCCESS: the Bloodwork Tool is updated and running.' -ForegroundColor Green
         Write-Host "  Now at commit $hash. Open http://localhost:3000 to use it." -ForegroundColor Green
     }
     else {
-        Log "RESULT: localhost:3000 DOWN after ~30s — the tool did not come back up."
+        Log "RESULT: localhost:3000 DOWN after ~30s - the tool did not come back up."
         Write-Host ''
         Write-Host '  WARNING: the update ran but localhost:3000 is not responding yet.' -ForegroundColor Yellow
         Write-Host '  Wait a minute and refresh the page; if it stays down, send Clay the' -ForegroundColor Yellow

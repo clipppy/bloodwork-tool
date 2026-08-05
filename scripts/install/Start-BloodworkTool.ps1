@@ -14,7 +14,7 @@
 # Resolve the repo from THIS script's own location (it lives at
 # <repo>\scripts\install\Start-BloodworkTool.ps1, so the repo root is two levels
 # up). This makes the tool run from wherever it's actually installed instead of a
-# hard-coded Documents path — matching how Update-BloodworkTool.ps1 already
+# hard-coded Documents path - matching how Update-BloodworkTool.ps1 already
 # resolves the repo, and sidestepping OneDrive-synced Documents folders entirely.
 $repo   = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $logOut = Join-Path $env:TEMP 'bloodwork-tool.log'
@@ -29,7 +29,7 @@ function Write-ErrLog([string]$message) {
 #    With $repo derived from $PSScriptRoot this only fails if this script was moved
 #    out of <repo>\scripts\install\.
 if (-not (Test-Path -LiteralPath (Join-Path $repo 'package.json'))) {
-    Write-ErrLog "Resolved repo root '$repo' has no package.json — Start-BloodworkTool.ps1 must live in <repo>\scripts\install\. Restore it there and restart the task."
+    Write-ErrLog "Resolved repo root '$repo' has no package.json - Start-BloodworkTool.ps1 must live in <repo>\scripts\install\. Restore it there and restart the task."
     exit 1
 }
 
