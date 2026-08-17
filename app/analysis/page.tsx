@@ -20,6 +20,12 @@ type LlmStatus =
   | { kind: "ok"; text: string }
   | { kind: "error"; message: string };
 
+type GenStatus =
+  | { kind: "idle" }
+  | { kind: "processing" }
+  | { kind: "success" }
+  | { kind: "error"; message: string };
+
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -31,10 +37,12 @@ export default function AnalysisPage() {
   const [patientDate, setPatientDate] = useState(todayISO());
   const [intake, setIntake] = useState("");
   const [llm, setLlm] = useState<LlmStatus>({ kind: "idle" });
+  const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const testing = llm.kind === "testing";
+  const generating = gen.kind === "processing";
 
   function acceptFile(f: File | undefined | null) {
     if (!f) return;
@@ -51,7 +59,55 @@ export default function AnalysisPage() {
   function clearFile() {
     setFile(null);
     setFileError(null);
+    setGen({ kind: "idle" });
     if (inputRef.current) inputRef.current.value = "";
+  }
+
+  async function generateAnalysis() {
+    if (!file || generating) return;
+    setGen({ kind: "processing" });
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("patientName", patientName);
+      form.append("patientDate", patientDate);
+      form.append("intake", intake);
+
+      const res = await fetch("/api/analysis/generate", {
+        method: "POST",
+        body: form,
+      });
+
+      if (!res.ok) {
+        let message = "Something went wrong";
+        try {
+          const data = await res.json();
+          if (data?.error) message = data.error;
+        } catch {
+          /* keep generic message */
+        }
+        setGen({ kind: "error", message });
+        return;
+      }
+
+      const cd = res.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename="([^"]+)"/);
+      const filename = match ? match[1] : "clinical-analysis.docx";
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      setGen({ kind: "success" });
+    } catch {
+      setGen({ kind: "error", message: "Something went wrong" });
+    }
   }
 
   async function testLlm() {
@@ -227,6 +283,74 @@ export default function AnalysisPage() {
             the API.
           </p>
         </div>
+
+        {/* Generate */}
+        <div className="mt-8 flex justify-center">
+          <button
+            type="button"
+            onClick={generateAnalysis}
+            disabled={!file || generating}
+            className="rounded-md border px-8 py-3 font-semibold text-white transition-colors"
+            style={{
+              backgroundColor: !file || generating ? "#9CA3AF" : TEAL,
+              borderColor: !file || generating ? "#9CA3AF" : NAVY,
+              cursor: !file || generating ? "not-allowed" : "pointer",
+            }}
+          >
+            Generate Clinical Analysis
+          </button>
+        </div>
+
+        <div className="mt-4 min-h-[2rem] text-center">
+          {gen.kind === "processing" && (
+            <div
+              className="flex items-center justify-center gap-2"
+              style={{ color: NAVY }}
+            >
+              <svg
+                className="animate-spin"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="10" stroke="#E5E7EB" strokeWidth="4" />
+                <path
+                  d="M22 12a10 10 0 0 1-10 10"
+                  stroke={TEAL}
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                />
+              </svg>
+              <span>Building the analysis...</span>
+            </div>
+          )}
+          {gen.kind === "success" && (
+            <div className="flex items-center justify-center gap-2 text-green-700">
+              <span aria-hidden="true">✓</span>
+              <span>Analysis generated. Download starting...</span>
+            </div>
+          )}
+          {gen.kind === "error" && (
+            <div className="text-red-600">
+              <span aria-hidden="true">⚠</span> {gen.message}{" "}
+              <button
+                type="button"
+                onClick={() => setGen({ kind: "idle" })}
+                className="underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+        </div>
+
+        <p className="mt-2 text-center text-xs opacity-70">
+          Phase 1a: the header, marker chart, and in-range list are built in code
+          from the tool&apos;s flags. The four narrative sections render as
+          labelled placeholders until Phase 1b.
+        </p>
 
         {/* Temporary Phase 0 wiring check */}
         <div className="mt-10 rounded-md border border-dashed p-4" style={{ borderColor: TEAL }}>
