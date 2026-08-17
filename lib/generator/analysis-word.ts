@@ -34,12 +34,17 @@ import {
 } from "docx";
 import {
   DISCLAIMER,
+  PRIOR_NOT_FOUND,
   PRIOR_PENDING,
   type ChartRow,
   type ComparisonGroup,
   type DeterministicAnalysis,
 } from "../analysis/deterministic";
-import type { AnalysisNarrative, NarrativeBlock } from "../analysis/prompt";
+import type {
+  AnalysisNarrative,
+  NarrativeBlock,
+  ReevalNarrative,
+} from "../analysis/prompt";
 
 // ----- Brand (matches generator/word.ts; duplicated because those constants
 // are module-private there and that file is intentionally not modified) -----
@@ -48,6 +53,8 @@ const TEAL = "4A90A4";
 const LIGHT_TEAL = "DCE9EE";
 const GREY = "666666";
 const LIGHT_GREY = "CCCCCC";
+const TREND_GREEN = "2E7D32";
+const TREND_RED = "C00000";
 
 const PAGE_WIDTH = 12240;
 const PAGE_HEIGHT = 15840;
@@ -89,8 +96,11 @@ export async function generateAnalysisReport(
 export async function generateReevalReport(
   analysis: DeterministicAnalysis,
   priorReportIngested: boolean,
+  narrative?: ReevalNarrative | null,
 ): Promise<Buffer> {
-  return Packer.toBuffer(buildReevalDocument(analysis, priorReportIngested));
+  return Packer.toBuffer(
+    buildReevalDocument(analysis, priorReportIngested, narrative ?? null),
+  );
 }
 
 // ----- Document assembly -----
@@ -268,6 +278,7 @@ function buildDocument(
 function buildReevalDocument(
   analysis: DeterministicAnalysis,
   priorReportIngested: boolean,
+  narrative: ReevalNarrative | null,
 ): Document {
   const children: Array<Paragraph | Table> = [];
   const h = analysis.header;
@@ -341,10 +352,14 @@ function buildReevalDocument(
   // Part I — Overview (LLM, 2b)
   children.push(sectionHeading("Part I: Overview"));
   children.push(
-    llmPlaceholder(
-      "Comparative Overview",
-      "What the patient originally presented with, what this panel compares against, and the headline direction of travel. Sourced from the de-identified prior report plus the current flags.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.overview)
+      : [
+          llmPlaceholder(
+            "Comparative Overview",
+            "What the patient originally presented with, what this panel compares against, and the headline direction of travel. Sourced from the de-identified prior report plus the current flags.",
+          ),
+        ]),
   );
 
   // Part II — comparison chart (deterministic current side)
@@ -373,8 +388,9 @@ function buildReevalDocument(
         spacing: { after: 240 },
         children: [
           runItalic(
-            `Prior-panel values and the improved/worsened trend are read from the prior report in the comparative pass; they render as ${PRIOR_PENDING} here. ` +
-              "Markers that were out of range previously but are within range now are added in that same pass — they cannot be identified from the current panel alone.",
+            narrative
+              ? `Prior-panel values are read from the prior report and are the only figures in this table not computed by the tool — please spot-check them against that report. ${PRIOR_NOT_FOUND} means the prior report printed no usable value for that marker. The improved / held / worsened trend is computed by the tool from the two values, not written by the model.`
+              : `Prior-panel values and the improved/worsened trend are read from the prior report in the comparative pass; they render as ${PRIOR_PENDING} here. Markers that were out of range previously but are within range now are added in that same pass — they cannot be identified from the current panel alone.`,
             GREY,
             18,
           ),
@@ -386,25 +402,40 @@ function buildReevalDocument(
   // Part III — comparative root causes (LLM, 2b)
   children.push(sectionHeading("Part III: Root Cause Analysis"));
   children.push(
-    llmPlaceholder(
-      "Comparative Root-Cause Analysis",
-      "Per-pattern reasoning across the two panels: what moved, what held, and why. The chart's numbers are supplied as ground truth and are never re-derived.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.rootCause)
+      : [
+          llmPlaceholder(
+            "Comparative Root-Cause Analysis",
+            "Per-pattern reasoning across the two panels: what moved, what held, and why. The chart's numbers are supplied as ground truth and are never re-derived.",
+          ),
+        ]),
   );
 
   // Part IV — updated protocol (LLM, 2b)
   children.push(sectionHeading("Part IV: Phased Protocol (Updated from Prior Plan)"));
   children.push(
-    llmPlaceholder(
-      "Updated Phased Protocol",
-      "Builds on the prior plan rather than replacing it: taper what improved, intensify or re-target what held or worsened. Category depth, practitioner discretion.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.protocol)
+      : [
+          llmPlaceholder(
+            "Updated Phased Protocol",
+            "Builds on the prior plan rather than replacing it: taper what improved, intensify or re-target what held or worsened. Category depth, practitioner discretion.",
+          ),
+        ]),
   );
 
   // Part V — plain-language summary (LLM, 2b)
   children.push(sectionHeading("Part V: Summary — In Plain Language"));
   children.push(
-    llmPlaceholder("Patient Summary", "Plain-language comparative recap for the patient."),
+    ...(narrative
+      ? renderBlocks(narrative.patientSummary)
+      : [
+          llmPlaceholder(
+            "Patient Summary",
+            "Plain-language comparative recap for the patient.",
+          ),
+        ]),
   );
 
   children.push(blank());
@@ -505,7 +536,7 @@ function buildComparisonTable(group: ComparisonGroup): Table {
     tableHeader: true,
     children: [
       chartHeaderCell("Marker", RC_MARKER, shading),
-      chartHeaderCell("Prior Panel", RC_PRIOR, shading),
+      chartHeaderCell("Prior Panel (from prior report)", RC_PRIOR, shading),
       chartHeaderCell("Current", RC_CURRENT, shading),
       chartHeaderCell("Lab Range", RC_LAB, shading),
       chartHeaderCell("Functional Optimal", RC_OPTIMAL, shading),
@@ -518,9 +549,7 @@ function buildComparisonTable(group: ComparisonGroup): Table {
       new TableRow({
         children: [
           chartCell(r.marker, RC_MARKER, { bold: true }),
-          // Placeholder columns render in grey italic so a reviewer cannot
-          // mistake them for data.
-          placeholderCell(r.prior, RC_PRIOR),
+          priorCell(r.prior, RC_PRIOR),
           chartCell(r.current, RC_CURRENT),
           chartCell(r.labRange, RC_LAB),
           chartCell(r.optimalRange, RC_OPTIMAL),
@@ -535,12 +564,39 @@ function buildComparisonTable(group: ComparisonGroup): Table {
   });
 }
 
-function placeholderCell(text: string, width: number): TableCell {
+/** Trend is computed in code, so its colour is a faithful signal, not a guess. */
+function trendColor(trend: string): string {
+  switch (trend) {
+    case "Improved":
+      return TREND_GREEN;
+    case "Worsened":
+      return TREND_RED;
+    case "Held":
+      return NAVY;
+    case "Stable/In Range":
+      return TEAL;
+    default:
+      return GREY;
+  }
+}
+
+/** The Prior column is the one LLM-sourced figure; render a missing one in
+ *  grey italic so it cannot read as data. */
+function priorCell(text: string, width: number): TableCell {
+  const missing = text === PRIOR_NOT_FOUND || text === PRIOR_PENDING;
   return new TableCell({
     borders: bordersAll(),
     width: { size: width, type: WidthType.DXA },
     margins: { top: 80, bottom: 80, left: 120, right: 120 },
-    children: [new Paragraph({ children: [runItalic(text, GREY, 18)] })],
+    children: [
+      new Paragraph({
+        children: [
+          missing
+            ? runItalic(text, GREY, 18)
+            : new TextRun({ text, color: "000000", size: 20, font: "Arial" }),
+        ],
+      }),
+    ],
   });
 }
 
@@ -568,7 +624,18 @@ function statusCell(
           }),
         ],
       }),
-      new Paragraph({ children: [runItalic(trend, GREY, 16)] }),
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: trend,
+            italics: true,
+            bold: trend === "Improved" || trend === "Worsened",
+            color: trendColor(trend),
+            size: 16,
+            font: "Arial",
+          }),
+        ],
+      }),
     ],
   });
 }
@@ -791,12 +858,32 @@ function renderBlocks(blocks: NarrativeBlock[]): Paragraph[] {
             }),
           ],
         });
-      case "bullet":
+      case "bullet": {
+        // Re-eval protocol bullets lead with an adjustment tag (CONTINUE:,
+        // TAPER:, NEW:, ...). Bold it so the change against the prior plan is
+        // scannable, exactly what the sample doc's "Adjustment Note" column does.
+        const tag = b.text.match(
+          /^(CONTINUE|TAPER|INTENSIFY|NEW|RE-START|RESTART|STOP|MONITOR|ADD):\s*/,
+        );
+        const children = tag
+          ? [
+              runPlain("•  ", "000000", 20),
+              new TextRun({
+                text: tag[0].trim() + " ",
+                bold: true,
+                color: NAVY,
+                size: 20,
+                font: "Arial",
+              }),
+              runPlain(b.text.slice(tag[0].length), "000000", 20),
+            ]
+          : [runPlain("•  ", "000000", 20), runPlain(b.text, "000000", 20)];
         return new Paragraph({
           spacing: { after: 60 },
           indent: { left: 460, hanging: 220 },
-          children: [runPlain("•  ", "000000", 20), runPlain(b.text, "000000", 20)],
+          children,
         });
+      }
       default:
         return new Paragraph({
           spacing: { after: 140 },

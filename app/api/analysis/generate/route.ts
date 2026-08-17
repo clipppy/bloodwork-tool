@@ -25,18 +25,27 @@ import { NextResponse } from "next/server";
 import { parseQuestPdf } from "../../../../lib/parsers/quest";
 import { matchMarkers } from "../../../../lib/matcher";
 import { flagMarkers } from "../../../../lib/flagging";
-import { buildDeterministicAnalysis } from "../../../../lib/analysis/deterministic";
+import {
+  buildDeterministicAnalysis,
+  buildMergedComparisonGroups,
+  computePriorInterval,
+} from "../../../../lib/analysis/deterministic";
 import {
   assertNoIdentifiers,
   buildPayload,
+  buildReevalPayload,
   serializePayload,
 } from "../../../../lib/analysis/deidentify";
 import {
   buildInitialAnalysisPrompt,
+  buildReevalPrompt,
   parseNarrative,
+  parseReevalNarrative,
+  REEVAL_SYSTEM_PROMPT,
   SYSTEM_PROMPT,
   NarrativeParseError,
   type AnalysisNarrative,
+  type ReevalNarrative,
 } from "../../../../lib/analysis/prompt";
 import { askClaude, AnalysisLlmError } from "../../../../lib/analysis/llm";
 import {
@@ -89,6 +98,27 @@ function docxResponse(buf: Buffer, filename: string, narrated: boolean): Respons
   });
 }
 
+function reevalResponse(
+  buf: Buffer,
+  patientNameRaw: string,
+  patientDate: string,
+  narrated: boolean,
+  extraHeaders: Record<string, string>,
+): Response {
+  return new NextResponse(new Uint8Array(buf), {
+    status: 200,
+    headers: {
+      "Content-Type":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": `attachment; filename="${reevalDownloadName(patientNameRaw, patientDate)}"`,
+      "Content-Length": String(buf.length),
+      "X-Analysis-Narrative": narrated ? "included" : "placeholders",
+      ...extraHeaders,
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 export async function POST(req: Request): Promise<Response> {
   let form: FormData;
   try {
@@ -106,6 +136,7 @@ export async function POST(req: Request): Promise<Response> {
   const skipNarrative = (form.get("skipNarrative") as string | null) === "1";
   const mode = (form.get("mode") as string | null) === "reeval" ? "reeval" : "initial";
   const priorFile = form.get("priorReport");
+  const priorPanelDate = (form.get("priorPanelDate") as string | null)?.trim() || "";
 
   const patientName = patientNameRaw || "Patient";
   const patientDate = patientDateRaw || new Date().toISOString().slice(0, 10);
@@ -172,7 +203,7 @@ export async function POST(req: Request): Promise<Response> {
       reportedDate: parsed.patientMeta.reportedDate,
     });
 
-    // ----- Re-evaluation (Phase 2a): deterministic scaffold, no LLM call -----
+    // ----- Re-evaluation -----
     if (mode === "reeval") {
       const pf = priorFile as File;
       let ingested;
@@ -194,21 +225,56 @@ export async function POST(req: Request): Promise<Response> {
         );
       }
 
-      // The redacted text is carried no further this phase: the comparative
-      // pass (2b) is what sends it. Sizes only, never content.
-      const buf = await generateReevalReport(analysis, true);
-      return new NextResponse(new Uint8Array(buf), {
-        status: 200,
-        headers: {
-          "Content-Type":
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          "Content-Disposition": `attachment; filename="${reevalDownloadName(patientNameRaw, patientDate)}"`,
-          "Content-Length": String(buf.length),
-          "X-Analysis-Narrative": "placeholders",
-          "X-Prior-Report": `${ingested.kind}; ${ingested.rawChars} chars; ${ingested.redactionCount} redactions`,
-          "Cache-Control": "no-store",
-        },
+      const priorHeaders = {
+        "X-Prior-Report": `${ingested.kind}; ${ingested.rawChars} chars; ${ingested.redactionCount} redactions`,
+      };
+
+      // Deterministic scaffold only — the 2a document, on request or as the
+      // recovery path after an API failure.
+      if (skipNarrative) {
+        const buf = await generateReevalReport(analysis, true, null);
+        return reevalResponse(buf, patientNameRaw, patientDate, false, priorHeaders);
+      }
+
+      const interval = computePriorInterval(priorPanelDate, analysis.header.collected);
+      const payload = buildReevalPayload(flagged, {
+        age: analysis.age,
+        sex: analysis.sex,
+        intake,
+        patientName,
+        dob,
+        priorPanelInterval: interval,
+        priorReportText: ingested.redactedText,
       });
+      const serialized = serializePayload(payload);
+      assertNoIdentifiers(serialized, { patientName, dob });
+
+      let reeval: ReevalNarrative;
+      try {
+        const response = await askClaude(buildReevalPrompt(payload), {
+          system: REEVAL_SYSTEM_PROMPT,
+          timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
+        });
+        reeval = parseReevalNarrative(response);
+      } catch (err) {
+        const message =
+          err instanceof AnalysisLlmError || err instanceof NarrativeParseError
+            ? err.message
+            : "Unexpected error generating the comparative narrative.";
+        return NextResponse.json(
+          { error: message, deterministicAvailable: true },
+          { status: 502 },
+        );
+      }
+
+      // Prior values are the model's only numeric contribution; the trend is
+      // recomputed here from prior vs current.
+      const merged = {
+        ...analysis,
+        comparisonGroups: buildMergedComparisonGroups(flagged, reeval.priorFacts),
+      };
+      const buf = await generateReevalReport(merged, true, reeval);
+      return reevalResponse(buf, patientNameRaw, patientDate, true, priorHeaders);
     }
 
     if (skipNarrative) {

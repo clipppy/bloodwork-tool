@@ -332,9 +332,13 @@ const CATEGORY_DISPLAY: Array<{ key: string; label: string }> = [
   { key: "endocrine", label: "Endocrine & Hormones" },
 ];
 
-/** Placeholder text for the two columns Phase 2b sources from the prior report. */
+/** Placeholder text for the two columns the comparative pass fills. */
 export const PRIOR_PENDING = "[from prior report]";
 export const TREND_PENDING = "[vs prior: pending]";
+/** Shown when the prior report did not print a usable value for a marker —
+ *  the situation the sample doc footnotes for WBC. */
+export const PRIOR_NOT_FOUND = "[prior value not found]";
+export const CURRENT_NOT_RETESTED = "[not retested]";
 
 export interface ComparisonRow {
   marker: string;
@@ -412,6 +416,210 @@ export function buildComparisonGroups(flagged: FlaggedMarker[]): ComparisonGroup
       if (ra !== rb) return ra - rb;
       return a.label.localeCompare(b.label);
     });
+}
+
+// ----- Re-evaluation: prior-panel merge and trend (both computed in code) -----
+
+/** What the comparative pass extracted for one marker from the prior report.
+ *  `value` is the ONLY LLM-sourced number in the document. */
+export interface PriorMarkerFact {
+  /** Verbatim prior value as printed on the prior report, e.g. "311 pg/mL". */
+  value: string | null;
+  /** Set when the model reports the two panels are not comparable (a different
+   *  assay, different units), as the sample doc notes for Vitamin D. */
+  notComparable?: boolean;
+}
+
+export type TrendLabel =
+  | "Improved"
+  | "Worsened"
+  | "Held"
+  | "Stable/In Range"
+  | "Not comparable"
+  | "Not retested"
+  | "Unknown";
+
+/** Distance from the optimal window; 0 when inside it. */
+function deviationFromOptimal(
+  value: number,
+  optimal: { min: number | null; max: number | null } | null,
+): number | null {
+  if (!optimal || (optimal.min === null && optimal.max === null)) return null;
+  if (optimal.min !== null && value < optimal.min) return optimal.min - value;
+  if (optimal.max !== null && value > optimal.max) return value - optimal.max;
+  return 0;
+}
+
+/**
+ * Improved / worsened / held, computed IN CODE by comparing how far the prior
+ * and current values sit from the marker's optimal window. The model never
+ * decides this — it only supplies the prior value.
+ */
+export function computeTrend(
+  canonicalName: string,
+  priorValue: string | null,
+  currentValue: number | string | null,
+  notComparable?: boolean,
+  /** The lab window the engine actually flagged this marker against. Used when
+   *  the dictionary has no numeric optimal window of its own — lab_range_only
+   *  markers such as Non-HDL Cholesterol carry their range on the report, not
+   *  in the dictionary. */
+  fallbackWindow?: { min: number | null; max: number | null } | null,
+): TrendLabel {
+  if (notComparable) return "Not comparable";
+  if (currentValue === null || currentValue === undefined) return "Not retested";
+  if (!priorValue) return "Unknown";
+
+  const p = numericValue(priorValue);
+  const c = numericValue(currentValue);
+  if (p === null || c === null) return "Unknown";
+
+  const rec = findMarker(canonicalName);
+  const hasBounds = (w: { min: number | null; max: number | null } | null | undefined) =>
+    !!w && (w.min !== null || w.max !== null);
+  const window = hasBounds(rec?.optimalRange)
+    ? rec!.optimalRange
+    : hasBounds(rec?.labRange)
+      ? rec!.labRange
+      : hasBounds(fallbackWindow)
+        ? fallbackWindow!
+        : null;
+
+  const devPrior = deviationFromOptimal(p, window);
+  const devCurrent = deviationFromOptimal(c, window);
+  if (devPrior === null || devCurrent === null) {
+    // No window to judge against: fall back to "did the number move at all".
+    if (p === c) return "Held";
+    return "Unknown";
+  }
+
+  if (devPrior === 0 && devCurrent === 0) return "Stable/In Range";
+
+  // Tolerance scales with how far out the marker is, NOT with the raw value:
+  // a 2 mmol/L sodium move is meaningful even though 2% of 135 is larger.
+  const scale = Math.max(Math.abs(devPrior), Math.abs(devCurrent));
+  const epsilon = scale * 0.02;
+  if (devCurrent < devPrior - epsilon) return "Improved";
+  if (devCurrent > devPrior + epsilon) return "Worsened";
+  return "Held";
+}
+
+/**
+ * Merge the prior-panel facts into the current-side chart.
+ *
+ * Rows are the UNION of (a) markers the engine flags on the current panel and
+ * (b) markers the prior report flagged. For (b) that are no longer flagged, the
+ * current value is looked up from the engine's full matched-marker set — so an
+ * "Improved" row appears even though the current panel does not flag it. A
+ * prior marker with no current counterpart renders as not retested. No row is
+ * created that neither source supports.
+ */
+export function buildMergedComparisonGroups(
+  flagged: FlaggedMarker[],
+  priorFacts: Map<string, PriorMarkerFact>,
+): ComparisonGroup[] {
+  const rank = new Map(CATEGORY_DISPLAY.map((c, i) => [c.key, i]));
+  const labels = new Map(CATEGORY_DISPLAY.map((c) => [c.key, c.label]));
+  const byName = new Map(flagged.map((m) => [m.canonicalName, m]));
+
+  const rowFor = (m: FlaggedMarker): ComparisonRow => {
+    const within = withinLabRange(m);
+    const fact = priorFacts.get(m.canonicalName);
+    const isFlaggedNow = isFlagged(m);
+    return {
+      marker: m.canonicalName,
+      prior: fact?.value ?? PRIOR_NOT_FOUND,
+      current: formatResult(m),
+      labRange: formatLabRange(m),
+      optimalRange: formatOptimalRange(m),
+      status: isFlaggedNow ? comparisonStatus(m, within) : "In Range",
+      trend: computeTrend(
+        m.canonicalName,
+        fact?.value ?? null,
+        m.value,
+        fact?.notComparable,
+        m.effectiveLabRange,
+      ),
+      withinLabRange: within,
+    };
+  };
+
+  const rows: ComparisonRow[] = [];
+  const seen = new Set<string>();
+
+  for (const m of flagged.filter(isFlagged)) {
+    rows.push(rowFor(m));
+    seen.add(m.canonicalName);
+  }
+  for (const [name, fact] of priorFacts) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const current = byName.get(name);
+    if (current) {
+      rows.push(rowFor(current));
+    } else {
+      // Flagged on the prior panel, absent from this one.
+      rows.push({
+        marker: name,
+        prior: fact.value ?? PRIOR_NOT_FOUND,
+        current: CURRENT_NOT_RETESTED,
+        labRange: "—",
+        optimalRange: "—",
+        status: "Not retested",
+        trend: "Not retested",
+        withinLabRange: null,
+      });
+    }
+  }
+
+  const buckets = new Map<string, ComparisonRow[]>();
+  for (const row of rows) {
+    const category = findMarker(row.marker)?.category ?? "other";
+    const bucket = buckets.get(category);
+    if (bucket) bucket.push(row);
+    else buckets.set(category, [row]);
+  }
+
+  return [...buckets.entries()]
+    .map(([category, groupRows]) => ({
+      category,
+      label: labels.get(category) ?? humanizeCategory(category),
+      rows: groupRows.sort((a, b) => a.marker.localeCompare(b.marker)),
+    }))
+    .sort((a, b) => {
+      const ra = rank.get(a.category) ?? Number.MAX_SAFE_INTEGER;
+      const rb = rank.get(b.category) ?? Number.MAX_SAFE_INTEGER;
+      if (ra !== rb) return ra - rb;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+/** "~8 months" between the prior panel and this draw. Only this label — never
+ *  the prior date itself — is allowed into the payload. */
+export function computePriorInterval(
+  priorPanelDate: string | null | undefined,
+  currentCollected: string,
+): string | null {
+  const p = (priorPanelDate ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!p) return null;
+  const prior = new Date(Number(p[1]), Number(p[2]) - 1, Number(p[3]));
+
+  let current: Date | null = null;
+  const us = currentCollected.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const iso = currentCollected.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (us) current = new Date(Number(us[3]), Number(us[1]) - 1, Number(us[2]));
+  else if (iso) current = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  if (!current) return null;
+
+  const days = (current.getTime() - prior.getTime()) / 86_400_000;
+  if (!Number.isFinite(days) || days <= 0) return null;
+
+  const months = Math.round(days / 30.44);
+  if (months < 1) return "~under 1 month";
+  if (months === 1) return "~1 month";
+  if (months < 24) return `~${months} months`;
+  const years = Math.round(months / 12);
+  return `~${years} years`;
 }
 
 function humanizeCategory(key: string): string {

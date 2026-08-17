@@ -38,6 +38,7 @@ export default function AnalysisPage() {
   const [mode, setMode] = useState<"initial" | "reeval">("initial");
   const [priorFile, setPriorFile] = useState<File | null>(null);
   const [priorError, setPriorError] = useState<string | null>(null);
+  const [priorPanelDate, setPriorPanelDate] = useState("");
   const [dob, setDob] = useState("");
   const [sex, setSex] = useState("");
   const [intake, setIntake] = useState("");
@@ -101,7 +102,10 @@ export default function AnalysisPage() {
       form.append("sex", sex);
       form.append("intake", intake);
       form.append("mode", mode);
-      if (mode === "reeval" && priorFile) form.append("priorReport", priorFile);
+      if (mode === "reeval" && priorFile) {
+        form.append("priorReport", priorFile);
+        form.append("priorPanelDate", priorPanelDate);
+      }
       if (skipNarrative) form.append("skipNarrative", "1");
 
       const res = await fetch("/api/analysis/generate", {
@@ -312,6 +316,29 @@ export default function AnalysisPage() {
               Text is extracted locally and de-identified — the patient name, date
               of birth, and any dates are stripped before the text is used.
             </p>
+
+            <div className="mt-4 sm:max-w-xs">
+              <label
+                htmlFor="analysis-prior-date"
+                className="mb-1 block text-sm font-medium"
+                style={{ color: NAVY }}
+              >
+                Prior panel date{" "}
+                <span className="font-normal opacity-70">(optional)</span>
+              </label>
+              <input
+                id="analysis-prior-date"
+                type="date"
+                value={priorPanelDate}
+                onChange={(e) => setPriorPanelDate(e.target.value)}
+                className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2"
+                style={{ borderColor: TEAL }}
+              />
+              <p className="mt-1 text-xs opacity-70">
+                Used for timing in the Overview. Only the interval (e.g. &ldquo;~8
+                months&rdquo;) is sent — never the date.
+              </p>
+            </div>
           </div>
         )}
 
@@ -518,7 +545,7 @@ export default function AnalysisPage() {
         <p className="mt-2 text-center text-xs opacity-70">
           {mode === "initial"
             ? "The header, marker chart, and in-range list are built in code from the tool's flags. The narrative sections are written by the model from a de-identified payload and reviewed by the practitioner."
-            : "Phase 2a: the current side of the comparison chart is built in code from the tool's flags. Prior-panel values, the improved/worsened trend, and the narrative Parts render as labelled placeholders until the comparative pass lands."}
+            : "The current side of the comparison chart and the improved/held/worsened trend are computed in code. Prior-panel values are read from the prior report by the model — spot-check them against that report."}
         </p>
       </div>
     </main>

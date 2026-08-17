@@ -181,8 +181,56 @@ export function buildPayload(
   };
 }
 
+// ----- Re-evaluation payload -----
+
+export interface ReevalPayload {
+  patient: {
+    age: number | null;
+    sex: PatientSex;
+    /** "~8 months" — the interval only. The prior panel's date never leaves. */
+    priorPanelInterval: string | null;
+  };
+  intake: string | null;
+  /** Markers the engine flags on the CURRENT panel — authoritative. */
+  currentFlaggedMarkers: PayloadMarker[];
+  /** Every matched marker on the current panel, so the model can look up the
+   *  current value of a marker the prior report flagged. Authoritative. */
+  currentAllMarkers: PayloadInRangeMarker[];
+  /** De-identified prior report text — the ONLY source of prior values. */
+  priorReportText: string;
+}
+
+export interface ReevalDeidentifyInputs extends DeidentifyInputs {
+  priorPanelInterval: string | null;
+  /** Already redacted by lib/analysis/prior-report.ts. */
+  priorReportText: string;
+}
+
+export function buildReevalPayload(
+  flagged: FlaggedMarker[],
+  inputs: ReevalDeidentifyInputs,
+): ReevalPayload {
+  const base = buildPayload(flagged, inputs);
+  return {
+    patient: {
+      age: inputs.age,
+      sex: inputs.sex,
+      priorPanelInterval: inputs.priorPanelInterval,
+    },
+    intake: base.intake,
+    currentFlaggedMarkers: base.flaggedMarkers,
+    currentAllMarkers: flagged
+      .filter((m) => m.matchStatus === "matched")
+      .map((m) => ({
+        name: m.canonicalName,
+        value: `${m.value}${m.unit ? ` ${m.unit}` : ""}`,
+      })),
+    priorReportText: inputs.priorReportText,
+  };
+}
+
 /** The exact JSON string embedded in the prompt. Log this to audit what left. */
-export function serializePayload(payload: AnalysisPayload): string {
+export function serializePayload(payload: AnalysisPayload | ReevalPayload): string {
   return JSON.stringify(payload, null, 2);
 }
 

@@ -11,8 +11,9 @@
  * structurally instead of by heuristics over prose.
  */
 
-import type { AnalysisPayload } from "./deidentify";
+import type { AnalysisPayload, ReevalPayload } from "./deidentify";
 import { serializePayload } from "./deidentify";
+import type { PriorMarkerFact } from "./deterministic";
 
 // ----- Parsed narrative -----
 
@@ -165,6 +166,211 @@ export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
   ]
     .filter((line) => line !== "")
     .join("\n");
+}
+
+// ----- Re-evaluation mode -----
+
+export interface ReevalNarrative {
+  /** Prior values keyed by canonical marker name. The only LLM-sourced numbers
+   *  that reach the document, and only into the Prior column. */
+  priorFacts: Map<string, PriorMarkerFact>;
+  overview: NarrativeBlock[];
+  rootCause: NarrativeBlock[];
+  protocol: NarrativeBlock[];
+  patientSummary: NarrativeBlock[];
+}
+
+const REEVAL_SECTION_KEYS = [
+  "PRIOR_MARKERS",
+  "OVERVIEW",
+  "ROOT_CAUSE",
+  "PROTOCOL",
+  "PATIENT_SUMMARY",
+] as const;
+
+type ReevalSectionKey = (typeof REEVAL_SECTION_KEYS)[number];
+
+export const REEVAL_SYSTEM_PROMPT = [
+  SYSTEM_PROMPT,
+  "",
+  "This is a FOLLOW-UP report comparing a current panel against the patient's",
+  "previous one. Two separate sources of truth, and they must not be mixed:",
+  "- CURRENT values come only from the structured marker data you are given.",
+  "- PRIOR values come only from the prior report text you are given.",
+  "Never carry a number from one side to the other, never estimate a prior value",
+  "that the prior report does not state, and never adjust a current value to make",
+  "a trend look cleaner. If the prior report does not print a value for a marker,",
+  "say so — that is a normal and useful finding.",
+  "",
+  "Do not state whether a marker improved or worsened as a verdict in the",
+  "comparison table: that is computed from the two values by the tool. You may of",
+  "course discuss direction of travel in the prose sections.",
+].join("\n");
+
+export function buildReevalPrompt(payload: ReevalPayload): string {
+  const hasIntake = !!payload.intake && payload.intake.trim().length > 0;
+  const ageSex = [
+    payload.patient.age !== null ? `${payload.patient.age}-year-old` : "age not provided",
+    payload.patient.sex !== "unspecified" ? payload.patient.sex : "sex not provided",
+  ].join(", ");
+  const interval = payload.patient.priorPanelInterval;
+
+  return [
+    `Patient context: ${ageSex}.`,
+    interval
+      ? `Time between the prior panel and this one: ${interval}.`
+      : "The interval between the two panels was not provided; do not guess it.",
+    "",
+    "CURRENT PANEL (computed by the tool; authoritative):",
+    "```json",
+    serializePayload(payload),
+    "```",
+    "",
+    "How to use that data:",
+    "- `currentFlaggedMarkers` are outside the standard lab range and/or the",
+    "  functional optimal range on the CURRENT panel. A trailing asterisk on",
+    "  `status` means inside the lab range but outside the functional range.",
+    "- `currentAllMarkers` is every marker measured on the current panel, so you",
+    "  can look up the current value of a marker the prior report flagged.",
+    "- `priorReportText` is the previous report, de-identified. It is the only",
+    "  source for prior values and for the prior protocol. [REDACTED] marks a",
+    "  removed identifier — ignore those tokens.",
+    "",
+    hasIntake
+      ? "PRACTITIONER INTAKE NOTES for this visit (identifiers removed):"
+      : "PRACTITIONER INTAKE NOTES: none provided for this visit.",
+    hasIntake ? "```" : "",
+    hasIntake ? (payload.intake as string) : "",
+    hasIntake ? "```" : "",
+    "",
+    "IMPORTANT: the comparison table is rendered by the tool from the data above",
+    "plus the prior values you extract. Do NOT reproduce that table anywhere in",
+    "your prose, and do not write a marker-by-marker list that restates it.",
+    "",
+    "Output EXACTLY these five sections, each introduced by its marker on its own",
+    "line, and nothing else.",
+    "",
+    "===PRIOR_MARKERS===",
+    "  One line per marker the PRIOR report flagged as outside its lab range or",
+    "  outside the functional/optimal range, in this pipe-delimited form:",
+    "    <marker name> | <prior value exactly as the prior report prints it> | <comparable|not-comparable>",
+    "  Rules:",
+    "  - Use the marker's name from `currentAllMarkers` verbatim whenever the",
+    "    prior marker corresponds to one; otherwise use the prior report's own name.",
+    "  - Copy the prior value character-for-character from the prior report,",
+    "    including its unit. If the prior report flagged a marker but printed no",
+    "    usable value, write NOT-PRINTED in the value field.",
+    "  - Mark not-comparable when the two panels used different assays or units",
+    "    for that marker, so a trend would be misleading.",
+    "  - Include a marker here even if it is normal on the current panel; that is",
+    "    how an improvement is surfaced. Do not include markers the prior report",
+    "    did not flag.",
+    "",
+    "===OVERVIEW===",
+    "  Two or three short paragraphs: what the patient originally presented with",
+    "  and what the prior panel found, what this panel is being compared against,",
+    "  and the headline direction of travel. Mention the interval only if it was",
+    "  provided above.",
+    "",
+    "===ROOT_CAUSE===",
+    "  Comparative reasoning grouped into clinical patterns, not a marker walk.",
+    "  For each pattern write a heading line starting with '## ' naming the",
+    "  markers and the direction they moved, then bullets starting with '- '",
+    "  covering: what changed since the prior panel and what held, the candidate",
+    "  mechanisms, whether the prior protocol plausibly explains the change, and",
+    "  what to confirm or trend next.",
+    "",
+    "===PROTOCOL===",
+    "  An UPDATED plan that builds on the prior report's protocol rather than",
+    "  replacing it. Each phase begins with a heading line starting with '## ' in",
+    "  the form '## Phase 1 - Re-establish Digestion (Weeks 1-6)', then a line",
+    "  starting with 'Goal: ', then bullets starting with '- '.",
+    "  Every protocol bullet MUST begin with one of these tags, which is how the",
+    "  practitioner sees what changed against the prior plan:",
+    "    CONTINUE:  kept as-is from the prior plan",
+    "    TAPER:     reduced to maintenance because the marker improved",
+    "    INTENSIFY: same intervention, pushed harder because the marker held",
+    "    NEW:       added because something worsened or is newly flagged",
+    "    RE-START:  was in the prior plan, appears to have lapsed",
+    "    STOP:      discontinue",
+    "    MONITOR:   retest or watch, no intervention change",
+    "  Name nutrient and botanical categories or specific options at practitioner",
+    "  discretion. No doses, no brands, no prescription regimens. If the prior",
+    "  report named a specific product, you may reference it as the prior plan's",
+    "  choice and say whether to continue, taper, or reassess it.",
+    "",
+    "===PATIENT_SUMMARY===",
+    "  Plain-language paragraphs addressed to the patient as 'you', roughly",
+    "  eighth-grade reading level. Lead with what improved, then what needs",
+    "  attention now and why, then what the updated plan does about it. No",
+    "  bullets, no name.",
+    "",
+    "===END===",
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+/** Parse "Name | value | comparable" lines into prior facts. */
+function parsePriorMarkers(raw: string): Map<string, PriorMarkerFact> {
+  const facts = new Map<string, PriorMarkerFact>();
+  for (const rawLine of raw.split("\n")) {
+    const line = cleanLine(rawLine).trim().replace(/^-\s*/, "");
+    if (!line || !line.includes("|")) continue;
+    const parts = line.split("|").map((p) => p.trim());
+    if (parts.length < 2) continue;
+    const [name, value, comparability] = parts;
+    if (!name || /^marker name$/i.test(name)) continue; // skip an echoed header
+
+    const notPrinted = !value || /^not[- ]printed$/i.test(value) || value === "—";
+    facts.set(name, {
+      value: notPrinted ? null : value,
+      notComparable: /not[- ]comparable/i.test(comparability ?? ""),
+    });
+  }
+  return facts;
+}
+
+export function parseReevalNarrative(response: string): ReevalNarrative {
+  const found = new Map<ReevalSectionKey, string>();
+
+  for (let i = 0; i < REEVAL_SECTION_KEYS.length; i++) {
+    const key = REEVAL_SECTION_KEYS[i];
+    const start = response.indexOf(`===${key}===`);
+    if (start === -1) continue;
+    const from = start + `===${key}===`.length;
+    let end = response.length;
+    for (const other of [...REEVAL_SECTION_KEYS.slice(i + 1), "END" as const]) {
+      const idx = response.indexOf(`===${other}===`, from);
+      if (idx !== -1 && idx < end) end = idx;
+    }
+    found.set(key, response.slice(from, end).trim());
+  }
+
+  const missing = REEVAL_SECTION_KEYS.filter((k) => !found.has(k));
+  if (missing.length) {
+    throw new NarrativeParseError(
+      `The model's response was missing ${missing.length} of 5 sections (${missing.join(", ")}).`,
+    );
+  }
+
+  const narrative: ReevalNarrative = {
+    priorFacts: parsePriorMarkers(found.get("PRIOR_MARKERS")!),
+    overview: parseBlocks(found.get("OVERVIEW")!),
+    rootCause: parseBlocks(found.get("ROOT_CAUSE")!),
+    protocol: parseBlocks(found.get("PROTOCOL")!),
+    patientSummary: parseBlocks(found.get("PATIENT_SUMMARY")!),
+  };
+
+  const empty = (["overview", "rootCause", "protocol", "patientSummary"] as const).filter(
+    (k) => narrative[k].length === 0,
+  );
+  if (empty.length) {
+    throw new NarrativeParseError(
+      `The model returned empty content for: ${empty.join(", ")}.`,
+    );
+  }
+  return narrative;
 }
 
 // ----- Response parsing -----
