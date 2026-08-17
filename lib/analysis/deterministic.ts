@@ -98,6 +98,9 @@ export interface ReassuringMarkers {
 export interface DeterministicAnalysis {
   header: AnalysisHeader;
   rows: ChartRow[];
+  /** Same markers as `rows`, grouped by category for the re-eval comparison
+   *  chart. Built for both modes; only the re-eval document renders it. */
+  comparisonGroups: ComparisonGroup[];
   reassuring: ReassuringMarkers;
   /** Integer age derived from the DOB, or null. This — not the DOB — is what
    *  the API payload is allowed to carry. */
@@ -310,6 +313,114 @@ export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
     });
 }
 
+// ----- Re-evaluation mode: category-grouped comparison rows -----
+
+/** Display names + print order for the dictionary's `category` slugs, grouped
+ *  the way the Bonnie re-eval sample groups its tables. */
+const CATEGORY_DISPLAY: Array<{ key: string; label: string }> = [
+  { key: "lipid", label: "Lipids" },
+  { key: "cardio_iq", label: "Advanced Lipid / Cardio IQ" },
+  { key: "metabolic", label: "Glucose & Insulin" },
+  { key: "inflammation", label: "Inflammation" },
+  { key: "hematology", label: "CBC / Red Blood Cell Indices" },
+  { key: "liver", label: "Liver" },
+  { key: "kidney", label: "Kidney" },
+  { key: "gut", label: "Digestive / Protein / Mineral Status" },
+  { key: "iron", label: "Iron Status" },
+  { key: "vitamins_minerals", label: "Vitamins & Minerals" },
+  { key: "immune_thyroid", label: "Immune & Thyroid" },
+  { key: "endocrine", label: "Endocrine & Hormones" },
+];
+
+/** Placeholder text for the two columns Phase 2b sources from the prior report. */
+export const PRIOR_PENDING = "[from prior report]";
+export const TREND_PENDING = "[vs prior: pending]";
+
+export interface ComparisonRow {
+  marker: string;
+  /** Always the placeholder in 2a — the prior value comes from the prior
+   *  report in 2b, never from this pipeline. */
+  prior: string;
+  current: string;
+  labRange: string;
+  optimalRange: string;
+  /** Deterministic lab/optimal verdict in the sample doc's vocabulary. */
+  status: string;
+  /** Placeholder for the improved/worsened half of the Status column. */
+  trend: string;
+  withinLabRange: boolean | null;
+}
+
+export interface ComparisonGroup {
+  category: string;
+  label: string;
+  rows: ComparisonRow[];
+}
+
+/**
+ * Status vocabulary from the re-eval sample: a value outside the lab range
+ * reads "Out of Lab Range", one inside it but outside the functional target
+ * reads "Out of Optimal". Whether it improved or worsened needs the prior
+ * panel and is deliberately left to Phase 2b.
+ */
+export function comparisonStatus(m: FlaggedMarker, within: boolean | null): string {
+  if (within === true) return "Out of Optimal";
+  if (within === false) return "Out of Lab Range";
+  return "Out of Optimal"; // no usable lab range: the flag came from the optimal/band side
+}
+
+/**
+ * Current-side comparison chart, grouped by the dictionary's category.
+ *
+ * Row set is the engine's own isFlagged() — the markers flagged on the CURRENT
+ * draw. Markers that were out of range on the prior panel but are optimal now
+ * (the sample's "Improved" rows) can only be identified from the prior report,
+ * so Phase 2b adds them; 2a never invents a row the current labs don't support.
+ */
+export function buildComparisonGroups(flagged: FlaggedMarker[]): ComparisonGroup[] {
+  const rank = new Map(CATEGORY_DISPLAY.map((c, i) => [c.key, i]));
+  const labels = new Map(CATEGORY_DISPLAY.map((c) => [c.key, c.label]));
+
+  const buckets = new Map<string, ComparisonRow[]>();
+  for (const m of flagged.filter(isFlagged)) {
+    const category = findMarker(m.canonicalName)?.category ?? "other";
+    const within = withinLabRange(m);
+    const row: ComparisonRow = {
+      marker: m.canonicalName,
+      prior: PRIOR_PENDING,
+      current: formatResult(m),
+      labRange: formatLabRange(m),
+      optimalRange: formatOptimalRange(m),
+      status: comparisonStatus(m, within),
+      trend: TREND_PENDING,
+      withinLabRange: within,
+    };
+    const bucket = buckets.get(category);
+    if (bucket) bucket.push(row);
+    else buckets.set(category, [row]);
+  }
+
+  return [...buckets.entries()]
+    .map(([category, rows]) => ({
+      category,
+      label: labels.get(category) ?? humanizeCategory(category),
+      rows: rows.sort((a, b) => a.marker.localeCompare(b.marker)),
+    }))
+    .sort((a, b) => {
+      const ra = rank.get(a.category) ?? Number.MAX_SAFE_INTEGER;
+      const rb = rank.get(b.category) ?? Number.MAX_SAFE_INTEGER;
+      if (ra !== rb) return ra - rb;
+      return a.label.localeCompare(b.label);
+    });
+}
+
+function humanizeCategory(key: string): string {
+  return key
+    .split("_")
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
 export function buildReassuring(flagged: FlaggedMarker[]): ReassuringMarkers {
   const optimal = flagged.filter((f) => f.flagStatus === "optimal");
   const label = (m: FlaggedMarker) =>
@@ -365,6 +476,7 @@ export function buildDeterministicAnalysis(
       preparedFor: PREPARED_FOR,
     },
     rows: buildChartRows(flagged),
+    comparisonGroups: buildComparisonGroups(flagged),
     reassuring: buildReassuring(flagged),
     age,
     sex: normalizeSex(inputs.sex),

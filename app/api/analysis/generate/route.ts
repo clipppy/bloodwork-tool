@@ -39,7 +39,15 @@ import {
   type AnalysisNarrative,
 } from "../../../../lib/analysis/prompt";
 import { askClaude, AnalysisLlmError } from "../../../../lib/analysis/llm";
-import { generateAnalysisReport } from "../../../../lib/generator/analysis-word";
+import {
+  ingestPriorReport,
+  PriorReportError,
+  priorReportKind,
+} from "../../../../lib/analysis/prior-report";
+import {
+  generateAnalysisReport,
+  generateReevalReport,
+} from "../../../../lib/generator/analysis-word";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +67,12 @@ function downloadName(patientName: string, patientDate: string): string {
   const slug = slugify(patientName);
   if (!slug) return "clinical-analysis.docx";
   return `clinical-analysis-${slug}-${patientDate}.docx`;
+}
+
+function reevalDownloadName(patientName: string, patientDate: string): string {
+  const slug = slugify(patientName);
+  if (!slug) return "clinical-analysis-reeval.docx";
+  return `clinical-analysis-reeval-${slug}-${patientDate}.docx`;
 }
 
 function docxResponse(buf: Buffer, filename: string, narrated: boolean): Response {
@@ -90,6 +104,8 @@ export async function POST(req: Request): Promise<Response> {
   const sex = (form.get("sex") as string | null)?.trim() || "";
   const intake = (form.get("intake") as string | null) || "";
   const skipNarrative = (form.get("skipNarrative") as string | null) === "1";
+  const mode = (form.get("mode") as string | null) === "reeval" ? "reeval" : "initial";
+  const priorFile = form.get("priorReport");
 
   const patientName = patientNameRaw || "Patient";
   const patientDate = patientDateRaw || new Date().toISOString().slice(0, 10);
@@ -107,6 +123,28 @@ export async function POST(req: Request): Promise<Response> {
       { error: "Could not read this PDF. Please check the file and try again." },
       { status: 400 },
     );
+  }
+
+  // ----- Re-eval mode requires a readable prior report -----
+  if (mode === "reeval") {
+    if (!priorFile || typeof priorFile === "string") {
+      return NextResponse.json(
+        { error: "Re-evaluation mode needs the prior report (.docx or .pdf)." },
+        { status: 400 },
+      );
+    }
+    if (!priorReportKind(priorFile.name)) {
+      return NextResponse.json(
+        { error: "The prior report must be a .docx or .pdf file." },
+        { status: 400 },
+      );
+    }
+    if (priorFile.size === 0) {
+      return NextResponse.json(
+        { error: "The prior report file is empty." },
+        { status: 400 },
+      );
+    }
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -133,6 +171,45 @@ export async function POST(req: Request): Promise<Response> {
       collectedDate: parsed.patientMeta.collectedDate,
       reportedDate: parsed.patientMeta.reportedDate,
     });
+
+    // ----- Re-evaluation (Phase 2a): deterministic scaffold, no LLM call -----
+    if (mode === "reeval") {
+      const pf = priorFile as File;
+      let ingested;
+      try {
+        ingested = await ingestPriorReport(
+          Buffer.from(await pf.arrayBuffer()),
+          pf.name,
+          { patientName, dob },
+        );
+      } catch (err) {
+        return NextResponse.json(
+          {
+            error:
+              err instanceof PriorReportError
+                ? err.message
+                : "Could not read the prior report.",
+          },
+          { status: 400 },
+        );
+      }
+
+      // The redacted text is carried no further this phase: the comparative
+      // pass (2b) is what sends it. Sizes only, never content.
+      const buf = await generateReevalReport(analysis, true);
+      return new NextResponse(new Uint8Array(buf), {
+        status: 200,
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "Content-Disposition": `attachment; filename="${reevalDownloadName(patientNameRaw, patientDate)}"`,
+          "Content-Length": String(buf.length),
+          "X-Analysis-Narrative": "placeholders",
+          "X-Prior-Report": `${ingested.kind}; ${ingested.rawChars} chars; ${ingested.redactionCount} redactions`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
 
     if (skipNarrative) {
       const buf = await generateAnalysisReport(analysis, null);

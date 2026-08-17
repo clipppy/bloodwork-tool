@@ -35,12 +35,16 @@ export default function AnalysisPage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [patientName, setPatientName] = useState("");
   const [patientDate, setPatientDate] = useState(todayISO());
+  const [mode, setMode] = useState<"initial" | "reeval">("initial");
+  const [priorFile, setPriorFile] = useState<File | null>(null);
+  const [priorError, setPriorError] = useState<string | null>(null);
   const [dob, setDob] = useState("");
   const [sex, setSex] = useState("");
   const [intake, setIntake] = useState("");
   const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const priorInputRef = useRef<HTMLInputElement>(null);
 
   const generating = gen.kind === "processing";
 
@@ -63,8 +67,30 @@ export default function AnalysisPage() {
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  function acceptPriorFile(f: File | undefined | null) {
+    if (!f) return;
+    const name = f.name.toLowerCase();
+    if (!name.endsWith(".docx") && !name.endsWith(".pdf")) {
+      setPriorError("The prior report must be a .docx or .pdf file");
+      return;
+    }
+    setPriorFile(f);
+    setPriorError(null);
+    setGen({ kind: "idle" });
+  }
+
+  function clearPriorFile() {
+    setPriorFile(null);
+    setPriorError(null);
+    if (priorInputRef.current) priorInputRef.current.value = "";
+  }
+
   async function generateAnalysis(skipNarrative = false) {
     if (!file || generating) return;
+    if (mode === "reeval" && !priorFile) {
+      setPriorError("Re-evaluation mode needs the prior report");
+      return;
+    }
     setGen({ kind: "processing" });
     try {
       const form = new FormData();
@@ -74,6 +100,8 @@ export default function AnalysisPage() {
       form.append("dob", dob);
       form.append("sex", sex);
       form.append("intake", intake);
+      form.append("mode", mode);
+      if (mode === "reeval" && priorFile) form.append("priorReport", priorFile);
       if (skipNarrative) form.append("skipNarrative", "1");
 
       const res = await fetch("/api/analysis/generate", {
@@ -97,7 +125,9 @@ export default function AnalysisPage() {
 
       const cd = res.headers.get("Content-Disposition") || "";
       const match = cd.match(/filename="([^"]+)"/);
-      const filename = match ? match[1] : "clinical-analysis.docx";
+      const filename =
+        match?.[1] ??
+        (mode === "reeval" ? "clinical-analysis-reeval.docx" : "clinical-analysis.docx");
       const narrated = res.headers.get("X-Analysis-Narrative") === "included";
 
       const blob = await res.blob();
@@ -132,6 +162,47 @@ export default function AnalysisPage() {
         <a href="/" className="text-sm underline" style={{ color: TEAL }}>
           &larr; Back to the data report
         </a>
+
+        {/* Mode toggle */}
+        <div className="mt-5">
+          <span className="mb-2 block text-sm font-medium" style={{ color: NAVY }}>
+            Report type
+          </span>
+          <div
+            className="inline-flex overflow-hidden rounded-md border"
+            style={{ borderColor: TEAL }}
+            role="group"
+          >
+            {(
+              [
+                ["initial", "Initial"],
+                ["reeval", "Re-evaluation"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setMode(value);
+                  setGen({ kind: "idle" });
+                }}
+                className="px-5 py-2 text-sm font-semibold transition-colors"
+                style={{
+                  backgroundColor: mode === value ? TEAL : "transparent",
+                  color: mode === value ? "#FFFFFF" : NAVY,
+                }}
+                aria-pressed={mode === value}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs opacity-70">
+            {mode === "initial"
+              ? "First functional-medicine panel for this patient."
+              : "Compares this panel against the patient's previous report. The prior report is required."}
+          </p>
+        </div>
 
         {/* Upload zone */}
         <label
@@ -203,6 +274,45 @@ export default function AnalysisPage() {
         </label>
         {fileError && (
           <p className="mt-2 text-center text-red-600">⚠ {fileError}</p>
+        )}
+
+        {mode === "reeval" && (
+          <div className="mt-6 rounded-md border p-4" style={{ borderColor: TEAL }}>
+            <label
+              htmlFor="analysis-prior"
+              className="mb-1 block text-sm font-medium"
+              style={{ color: NAVY }}
+            >
+              Prior report <span className="text-red-600">*</span>{" "}
+              <span className="font-normal opacity-70">(.docx or .pdf)</span>
+            </label>
+            <input
+              id="analysis-prior"
+              ref={priorInputRef}
+              type="file"
+              accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={(e) => acceptPriorFile(e.target.files?.[0])}
+              className="block w-full text-sm"
+            />
+            {priorFile && (
+              <p className="mt-2 text-sm" style={{ color: NAVY }}>
+                {priorFile.name}{" "}
+                <button
+                  type="button"
+                  onClick={clearPriorFile}
+                  className="ml-2 underline"
+                  style={{ color: TEAL }}
+                >
+                  × Remove
+                </button>
+              </p>
+            )}
+            {priorError && <p className="mt-2 text-red-600">⚠ {priorError}</p>}
+            <p className="mt-2 text-xs opacity-70">
+              Text is extracted locally and de-identified — the patient name, date
+              of birth, and any dates are stripped before the text is used.
+            </p>
+          </div>
         )}
 
         {/* Patient fields */}
@@ -336,7 +446,9 @@ export default function AnalysisPage() {
               cursor: !file || generating ? "not-allowed" : "pointer",
             }}
           >
-            Generate Clinical Analysis
+            {mode === "reeval"
+              ? "Generate Re-evaluation Analysis"
+              : "Generate Clinical Analysis"}
           </button>
         </div>
 
@@ -404,9 +516,9 @@ export default function AnalysisPage() {
         </div>
 
         <p className="mt-2 text-center text-xs opacity-70">
-          The header, marker chart, and in-range list are built in code from the
-          tool&apos;s flags. The narrative sections are written by the model from
-          a de-identified payload and reviewed by the practitioner.
+          {mode === "initial"
+            ? "The header, marker chart, and in-range list are built in code from the tool's flags. The narrative sections are written by the model from a de-identified payload and reviewed by the practitioner."
+            : "Phase 2a: the current side of the comparison chart is built in code from the tool's flags. Prior-panel values, the improved/worsened trend, and the narrative Parts render as labelled placeholders until the comparative pass lands."}
         </p>
       </div>
     </main>

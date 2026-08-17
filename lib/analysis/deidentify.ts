@@ -95,21 +95,27 @@ export function redactIntake(
   intake: string,
   patientName: string,
   dob?: string | null,
+  /** Additional personal names to strip — e.g. the practitioner named in a
+   *  prior report's "Prepared For" line. Not patient PHI, but there is no
+   *  reason to send a person's name to the API. */
+  extraNames: string[] = [],
 ): string {
   let out = intake;
 
-  // 1. Known patient name, whole and by token (tokens of 3+ chars only, so a
+  // 1. Known personal names, whole and by token (tokens of 3+ chars only, so a
   //    middle initial can't blank out every "A" in the text).
-  const nameTokens = patientName
-    .split(/\s+/)
-    .map((t) => t.replace(/[^A-Za-z'-]/g, ""))
-    .filter((t) => t.length >= 3);
-  const wholeName = patientName.trim();
-  if (wholeName.length >= 3) {
-    out = out.replace(new RegExp(escapeRe(wholeName), "gi"), REDACTED);
-  }
-  for (const t of nameTokens) {
-    out = out.replace(new RegExp(`\\b${escapeRe(t)}\\b`, "gi"), REDACTED);
+  for (const raw of [patientName, ...extraNames]) {
+    const whole = (raw ?? "").trim();
+    if (whole.length >= 3) {
+      out = out.replace(new RegExp(escapeRe(whole), "gi"), REDACTED);
+    }
+    const tokens = whole
+      .split(/\s+/)
+      .map((t) => t.replace(/[^A-Za-z'-]/g, ""))
+      .filter((t) => t.length >= 3);
+    for (const t of tokens) {
+      out = out.replace(new RegExp(`\\b${escapeRe(t)}\\b`, "gi"), REDACTED);
+    }
   }
 
   // 2. The DOB in the form's own format, plus its US rendering.

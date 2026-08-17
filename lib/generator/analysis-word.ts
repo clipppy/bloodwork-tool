@@ -34,7 +34,9 @@ import {
 } from "docx";
 import {
   DISCLAIMER,
+  PRIOR_PENDING,
   type ChartRow,
+  type ComparisonGroup,
   type DeterministicAnalysis,
 } from "../analysis/deterministic";
 import type { AnalysisNarrative, NarrativeBlock } from "../analysis/prompt";
@@ -74,6 +76,21 @@ export async function generateAnalysisReport(
   narrative?: AnalysisNarrative | null,
 ): Promise<Buffer> {
   return Packer.toBuffer(buildDocument(analysis, narrative ?? null));
+}
+
+/**
+ * Re-evaluation variant, mirroring
+ * samples/analysis-examples/"Bonnie St. Germain - BW Re-eval 1.docx":
+ * header line, Part I Overview, Part II legend + category-grouped comparison
+ * chart, Parts III-V. Phase 2a fills the current side of the chart from the
+ * flagging engine; the Prior column, the improved/worsened trend, and the four
+ * narrative Parts render as labelled placeholders until Phase 2b.
+ */
+export async function generateReevalReport(
+  analysis: DeterministicAnalysis,
+  priorReportIngested: boolean,
+): Promise<Buffer> {
+  return Packer.toBuffer(buildReevalDocument(analysis, priorReportIngested));
 }
 
 // ----- Document assembly -----
@@ -242,6 +259,316 @@ function buildDocument(
         },
         children,
       },
+    ],
+  });
+}
+
+// ----- Re-evaluation document -----
+
+function buildReevalDocument(
+  analysis: DeterministicAnalysis,
+  priorReportIngested: boolean,
+): Document {
+  const children: Array<Paragraph | Table> = [];
+  const h = analysis.header;
+
+  children.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 60 },
+      children: [
+        new TextRun({
+          text: "CARBONE CHIROPRACTIC CENTER, LLC",
+          bold: true,
+          color: NAVY,
+          size: 28,
+          font: "Arial",
+        }),
+      ],
+    }),
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+      children: [
+        new TextRun({
+          text: "FUNCTIONAL MEDICINE FOLLOW-UP REPORT — COMPARATIVE ANALYSIS",
+          bold: true,
+          color: TEAL,
+          size: 24,
+          font: "Arial",
+        }),
+      ],
+    }),
+    // Sample renders this as one line: "Patient: <name>   |   <date>".
+    new Paragraph({
+      spacing: { after: 60 },
+      children: [
+        runBold("Patient: "),
+        runPlain(h.patientName),
+        runPlain("   |   "),
+        runPlain(h.collected),
+        ...(h.dobAge !== "—"
+          ? [runPlain("   |   "), runBold("DOB / Age: "), runPlain(h.dobAge)]
+          : []),
+      ],
+    }),
+    new Paragraph({
+      spacing: { after: 200 },
+      children: [
+        runItalic(
+          priorReportIngested
+            ? "Prior report received and de-identified; prior values are merged in the comparative pass."
+            : "No prior report was supplied.",
+          GREY,
+          18,
+        ),
+      ],
+    }),
+    new Paragraph({
+      spacing: { after: 240 },
+      children: [
+        new TextRun({
+          text: DISCLAIMER,
+          italics: true,
+          color: GREY,
+          size: 20,
+          font: "Arial",
+        }),
+      ],
+    }),
+  );
+
+  // Part I — Overview (LLM, 2b)
+  children.push(sectionHeading("Part I: Overview"));
+  children.push(
+    llmPlaceholder(
+      "Comparative Overview",
+      "What the patient originally presented with, what this panel compares against, and the headline direction of travel. Sourced from the de-identified prior report plus the current flags.",
+    ),
+  );
+
+  // Part II — comparison chart (deterministic current side)
+  children.push(sectionHeading("Part II: Marker Comparison — Out of Range Findings"));
+  children.push(buildLegend());
+
+  if (analysis.comparisonGroups.length === 0) {
+    children.push(
+      new Paragraph({
+        spacing: { after: 200 },
+        children: [
+          runPlain(
+            "No markers on the current panel fell outside the standard laboratory range or the functional optimal range.",
+          ),
+        ],
+      }),
+    );
+  } else {
+    for (const group of analysis.comparisonGroups) {
+      children.push(groupHeading(group.label));
+      children.push(buildComparisonTable(group));
+      children.push(blank());
+    }
+    children.push(
+      new Paragraph({
+        spacing: { after: 240 },
+        children: [
+          runItalic(
+            `Prior-panel values and the improved/worsened trend are read from the prior report in the comparative pass; they render as ${PRIOR_PENDING} here. ` +
+              "Markers that were out of range previously but are within range now are added in that same pass — they cannot be identified from the current panel alone.",
+            GREY,
+            18,
+          ),
+        ],
+      }),
+    );
+  }
+
+  // Part III — comparative root causes (LLM, 2b)
+  children.push(sectionHeading("Part III: Root Cause Analysis"));
+  children.push(
+    llmPlaceholder(
+      "Comparative Root-Cause Analysis",
+      "Per-pattern reasoning across the two panels: what moved, what held, and why. The chart's numbers are supplied as ground truth and are never re-derived.",
+    ),
+  );
+
+  // Part IV — updated protocol (LLM, 2b)
+  children.push(sectionHeading("Part IV: Phased Protocol (Updated from Prior Plan)"));
+  children.push(
+    llmPlaceholder(
+      "Updated Phased Protocol",
+      "Builds on the prior plan rather than replacing it: taper what improved, intensify or re-target what held or worsened. Category depth, practitioner discretion.",
+    ),
+  );
+
+  // Part V — plain-language summary (LLM, 2b)
+  children.push(sectionHeading("Part V: Summary — In Plain Language"));
+  children.push(
+    llmPlaceholder("Patient Summary", "Plain-language comparative recap for the patient."),
+  );
+
+  children.push(blank());
+  children.push(
+    new Paragraph({
+      spacing: { before: 240 },
+      children: [
+        new TextRun({
+          text: FOOTER_NOTE,
+          italics: true,
+          color: GREY,
+          size: 18,
+          font: "Arial",
+        }),
+      ],
+    }),
+  );
+
+  return new Document({
+    creator: "Carbone Chiropractic Center, LLC",
+    title: "Functional Medicine Follow-Up Report",
+    description: "Comparative analysis of current and prior blood work",
+    sections: [
+      {
+        properties: {
+          page: {
+            size: { width: PAGE_WIDTH, height: PAGE_HEIGHT },
+            margin: {
+              top: PAGE_MARGIN,
+              right: PAGE_MARGIN,
+              bottom: PAGE_MARGIN,
+              left: PAGE_MARGIN,
+            },
+          },
+        },
+        children,
+      },
+    ],
+  });
+}
+
+/** The sample's colour key, above the comparison tables. */
+function buildLegend(): Paragraph {
+  return new Paragraph({
+    spacing: { after: 160 },
+    children: [
+      runBold("Legend:  "),
+      new TextRun({
+        text: "  Out of Lab Range  ",
+        bold: true,
+        color: "FFFFFF",
+        size: 18,
+        font: "Arial",
+        shading: { fill: NAVY, type: ShadingType.CLEAR, color: "auto" },
+      }),
+      runPlain("   "),
+      new TextRun({
+        text: "  Out of Functional Optimal Range  ",
+        bold: true,
+        color: "FFFFFF",
+        size: 18,
+        font: "Arial",
+        shading: { fill: TEAL, type: ShadingType.CLEAR, color: "auto" },
+      }),
+      runPlain("   "),
+      new TextRun({
+        text: "  Improved Since Last Panel  ",
+        bold: true,
+        color: GREY,
+        size: 18,
+        font: "Arial",
+        shading: { fill: LIGHT_GREY, type: ShadingType.CLEAR, color: "auto" },
+      }),
+    ],
+  });
+}
+
+function groupHeading(label: string): Paragraph {
+  return new Paragraph({
+    spacing: { before: 240, after: 100 },
+    children: [
+      new TextRun({ text: label, bold: true, color: NAVY, size: 22, font: "Arial" }),
+    ],
+  });
+}
+
+// Comparison columns sum to CONTENT_WIDTH (9360).
+const RC_MARKER = 2000;
+const RC_PRIOR = 1400;
+const RC_CURRENT = 1600;
+const RC_LAB = 1400;
+const RC_OPTIMAL = 1600;
+const RC_STATUS = 1360;
+
+function buildComparisonTable(group: ComparisonGroup): Table {
+  const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
+  const head = new TableRow({
+    tableHeader: true,
+    children: [
+      chartHeaderCell("Marker", RC_MARKER, shading),
+      chartHeaderCell("Prior Panel", RC_PRIOR, shading),
+      chartHeaderCell("Current", RC_CURRENT, shading),
+      chartHeaderCell("Lab Range", RC_LAB, shading),
+      chartHeaderCell("Functional Optimal", RC_OPTIMAL, shading),
+      chartHeaderCell("Status", RC_STATUS, shading),
+    ],
+  });
+
+  const body = group.rows.map(
+    (r) =>
+      new TableRow({
+        children: [
+          chartCell(r.marker, RC_MARKER, { bold: true }),
+          // Placeholder columns render in grey italic so a reviewer cannot
+          // mistake them for data.
+          placeholderCell(r.prior, RC_PRIOR),
+          chartCell(r.current, RC_CURRENT),
+          chartCell(r.labRange, RC_LAB),
+          chartCell(r.optimalRange, RC_OPTIMAL),
+          statusCell(r.status, r.trend, RC_STATUS, r.withinLabRange),
+        ],
+      }),
+  );
+
+  return new Table({
+    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    rows: [head, ...body],
+  });
+}
+
+function placeholderCell(text: string, width: number): TableCell {
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    margins: { top: 80, bottom: 80, left: 120, right: 120 },
+    children: [new Paragraph({ children: [runItalic(text, GREY, 18)] })],
+  });
+}
+
+/** Deterministic lab/optimal verdict on line 1; the comparative half, which
+ *  needs the prior panel, as a clearly-marked placeholder on line 2. */
+function statusCell(
+  status: string,
+  trend: string,
+  width: number,
+  withinLabRange: boolean | null,
+): TableCell {
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    margins: { top: 80, bottom: 80, left: 120, right: 120 },
+    children: [
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: status,
+            bold: true,
+            color: withinLabRange === true ? TEAL : NAVY,
+            size: 20,
+            font: "Arial",
+          }),
+        ],
+      }),
+      new Paragraph({ children: [runItalic(trend, GREY, 16)] }),
     ],
   });
 }
