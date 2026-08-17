@@ -17,7 +17,12 @@
 
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
-import { redactIntake } from "./deidentify";
+import {
+  findResidualNameCandidates,
+  redactIntake,
+  redactLabeledIdentifiers,
+  type ResidualNameCandidate,
+} from "./deidentify";
 import { PREPARED_FOR } from "./deterministic";
 
 /** Upper bound on the text handed downstream. Generous — the Bonnie sample is
@@ -43,6 +48,9 @@ export interface PriorReportIngest {
   redactedChars: number;
   redactionCount: number;
   truncated: boolean;
+  /** Anything still shaped like a person's name after redaction. Surfaced for
+   *  practitioner review — never silently sent. */
+  residualNameCandidates: ResidualNameCandidate[];
 }
 
 export function priorReportKind(filename: string): PriorReportKind | null {
@@ -100,10 +108,19 @@ export async function ingestPriorReport(
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  // A prior report names the practitioner in its "Prepared For" line; strip
-  // that too. Not patient PHI, but no personal name needs to reach the API.
-  const redacted = redactIntake(normalized, identifiers.patientName, identifiers.dob, [
+  // 1. STRUCTURAL first: strip the value after any identifier label, whatever
+  //    it says. This does not consult the form, so a prior report for the wrong
+  //    patient — or one printing "Last, First" against a typed "First Last" —
+  //    is still scrubbed.
+  const structural = redactLabeledIdentifiers(normalized);
+
+  // 2. Then the form-name, DOB and date-token pass on top — plus the names
+  //    harvested in step 1, so the same person referred to in PROSE
+  //    ("Bonnie originally presented with...") is caught even when the form
+  //    name does not match the prior report at all.
+  const redacted = redactIntake(structural.text, identifiers.patientName, identifiers.dob, [
     PREPARED_FOR,
+    ...structural.harvestedNames,
   ]);
 
   const truncated = redacted.length > MAX_PRIOR_TEXT_CHARS;
@@ -118,5 +135,9 @@ export async function ingestPriorReport(
     redactedChars: redactedText.length,
     redactionCount: (redactedText.match(/\[REDACTED\]/g) ?? []).length,
     truncated,
+    residualNameCandidates: findResidualNameCandidates(redactedText, [
+      identifiers.patientName,
+      PREPARED_FOR,
+    ]),
   };
 }

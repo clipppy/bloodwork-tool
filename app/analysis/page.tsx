@@ -20,6 +20,16 @@ import { useRef, useState } from "react";
 const NAVY = "#1B365D";
 const TEAL = "#4A90A4";
 
+type PriorPreview = {
+  kind: string;
+  rawChars: number;
+  redactedChars: number;
+  redactionCount: number;
+  truncated: boolean;
+  residualNameCandidates: { text: string; count: number }[];
+  redactedText: string;
+};
+
 type GenStatus =
   | { kind: "idle" }
   | { kind: "processing" }
@@ -39,6 +49,9 @@ export default function AnalysisPage() {
   const [priorFile, setPriorFile] = useState<File | null>(null);
   const [priorError, setPriorError] = useState<string | null>(null);
   const [priorPanelDate, setPriorPanelDate] = useState("");
+  const [priorPreview, setPriorPreview] = useState<PriorPreview | null>(null);
+  const [priorPreviewLoading, setPriorPreviewLoading] = useState(false);
+  const [priorReviewed, setPriorReviewed] = useState(false);
   const [dob, setDob] = useState("");
   const [sex, setSex] = useState("");
   const [intake, setIntake] = useState("");
@@ -68,6 +81,11 @@ export default function AnalysisPage() {
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  function resetPriorReview() {
+    setPriorPreview(null);
+    setPriorReviewed(false);
+  }
+
   function acceptPriorFile(f: File | undefined | null) {
     if (!f) return;
     const name = f.name.toLowerCase();
@@ -78,18 +96,53 @@ export default function AnalysisPage() {
     setPriorFile(f);
     setPriorError(null);
     setGen({ kind: "idle" });
+    resetPriorReview();
   }
 
   function clearPriorFile() {
     setPriorFile(null);
     setPriorError(null);
+    resetPriorReview();
     if (priorInputRef.current) priorInputRef.current.value = "";
+  }
+
+  async function loadPriorPreview() {
+    if (!priorFile || priorPreviewLoading) return;
+    setPriorPreviewLoading(true);
+    setPriorError(null);
+    try {
+      const form = new FormData();
+      form.append("priorReport", priorFile);
+      form.append("patientName", patientName);
+      form.append("dob", dob);
+      const res = await fetch("/api/analysis/prior-preview", {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPriorError(data?.error || "Could not read the prior report");
+        return;
+      }
+      setPriorPreview(data as PriorPreview);
+      setPriorReviewed(false);
+    } catch {
+      setPriorError("Could not reach the server");
+    } finally {
+      setPriorPreviewLoading(false);
+    }
   }
 
   async function generateAnalysis(skipNarrative = false) {
     if (!file || generating) return;
     if (mode === "reeval" && !priorFile) {
       setPriorError("Re-evaluation mode needs the prior report");
+      return;
+    }
+    if (mode === "reeval" && !skipNarrative && !priorReviewed) {
+      setPriorError(
+        "Review the de-identified prior-report text and tick the confirmation before generating",
+      );
       return;
     }
     setGen({ kind: "processing" });
@@ -105,6 +158,7 @@ export default function AnalysisPage() {
       if (mode === "reeval" && priorFile) {
         form.append("priorReport", priorFile);
         form.append("priorPanelDate", priorPanelDate);
+        if (priorReviewed) form.append("priorReviewed", "1");
       }
       if (skipNarrative) form.append("skipNarrative", "1");
 
@@ -316,6 +370,91 @@ export default function AnalysisPage() {
               Text is extracted locally and de-identified — the patient name, date
               of birth, and any dates are stripped before the text is used.
             </p>
+
+            {priorFile && (
+              <div
+                className="mt-4 rounded-md border p-3"
+                style={{ borderColor: priorReviewed ? "#2E7D32" : TEAL }}
+              >
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={loadPriorPreview}
+                    disabled={priorPreviewLoading}
+                    className="rounded-md border px-4 py-2 text-sm font-semibold text-white"
+                    style={{
+                      backgroundColor: priorPreviewLoading ? "#9CA3AF" : NAVY,
+                      borderColor: priorPreviewLoading ? "#9CA3AF" : NAVY,
+                      cursor: priorPreviewLoading ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {priorPreviewLoading
+                      ? "Preparing..."
+                      : priorPreview
+                        ? "Refresh redacted text"
+                        : "Review redacted prior text"}
+                  </button>
+                  <span className="text-xs opacity-70">
+                    Required before the comparative analysis can run.
+                  </span>
+                </div>
+
+                {priorPreview && (
+                  <div className="mt-3">
+                    <p className="text-xs" style={{ color: NAVY }}>
+                      This is the <strong>exact text</strong> that will be sent.{" "}
+                      {priorPreview.redactionCount} identifier
+                      {priorPreview.redactionCount === 1 ? "" : "s"} removed from{" "}
+                      {priorPreview.rawChars.toLocaleString()} characters of{" "}
+                      {priorPreview.kind.toUpperCase()}.
+                      {priorPreview.truncated ? " Text was truncated for length." : ""}
+                    </p>
+
+                    {priorPreview.residualNameCandidates.length > 0 && (
+                      <div className="mt-2 rounded border border-amber-400 bg-amber-50 p-2 text-xs">
+                        <p className="font-semibold text-amber-900">
+                          Still present and shaped like a name — check these before
+                          confirming:
+                        </p>
+                        <p className="mt-1 text-amber-900">
+                          {priorPreview.residualNameCandidates
+                            .map((c) => `${c.text}${c.count > 1 ? ` (x${c.count})` : ""}`)
+                            .join(" · ")}
+                        </p>
+                        <p className="mt-1 text-amber-800 opacity-80">
+                          Clinical phrases are expected here. If any of these is a
+                          person, do not confirm — remove it from the file first.
+                        </p>
+                      </div>
+                    )}
+
+                    <textarea
+                      readOnly
+                      value={priorPreview.redactedText}
+                      rows={14}
+                      className="mt-2 w-full rounded-md border px-3 py-2 font-mono text-xs"
+                      style={{ borderColor: TEAL }}
+                    />
+
+                    <label className="mt-2 flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={priorReviewed}
+                        onChange={(e) => {
+                          setPriorReviewed(e.target.checked);
+                          setPriorError(null);
+                        }}
+                        className="mt-1"
+                      />
+                      <span style={{ color: NAVY }}>
+                        I have reviewed this text and confirm it contains no patient
+                        identifiers.
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="mt-4 sm:max-w-xs">
               <label

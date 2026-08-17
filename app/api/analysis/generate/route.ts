@@ -137,6 +137,7 @@ export async function POST(req: Request): Promise<Response> {
   const mode = (form.get("mode") as string | null) === "reeval" ? "reeval" : "initial";
   const priorFile = form.get("priorReport");
   const priorPanelDate = (form.get("priorPanelDate") as string | null)?.trim() || "";
+  const priorReviewed = (form.get("priorReviewed") as string | null) === "1";
 
   const patientName = patientNameRaw || "Patient";
   const patientDate = patientDateRaw || new Date().toISOString().slice(0, 10);
@@ -227,6 +228,7 @@ export async function POST(req: Request): Promise<Response> {
 
       const priorHeaders = {
         "X-Prior-Report": `${ingested.kind}; ${ingested.rawChars} chars; ${ingested.redactionCount} redactions`,
+        "X-Prior-Residual-Names": String(ingested.residualNameCandidates.length),
       };
 
       // Deterministic scaffold only — the 2a document, on request or as the
@@ -234,6 +236,20 @@ export async function POST(req: Request): Promise<Response> {
       if (skipNarrative) {
         const buf = await generateReevalReport(analysis, true, null);
         return reevalResponse(buf, patientNameRaw, patientDate, false, priorHeaders);
+      }
+
+      // The de-identified prior text is about to be sent. Refuse unless the
+      // client confirms the practitioner reviewed exactly what goes out.
+      if (!priorReviewed) {
+        return NextResponse.json(
+          {
+            error:
+              "Review the de-identified prior-report text and confirm it before generating the comparative analysis.",
+            needsPriorReview: true,
+            deterministicAvailable: true,
+          },
+          { status: 428 },
+        );
       }
 
       const interval = computePriorInterval(priorPanelDate, analysis.header.collected);
