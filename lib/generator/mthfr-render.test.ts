@@ -1,6 +1,7 @@
 /**
  * MTHFR render-path test (plan step 5). No test runner is configured, so this
- * is a self-contained tsx script using node:assert; exits non-zero on failure.
+ * is a self-contained tsx script using a local ok() helper; it collects
+ * failures and exits non-zero if any are recorded.
  *
  * Proves — WITHOUT a real PDF — that the two MTHFR variant rows that real
  * reports list (MTHFR C677T / MTHFR A1298C) now:
@@ -11,13 +12,11 @@
  * Run: npx tsx lib/generator/mthfr-render.test.ts   (or: npm run test:mthfr)
  */
 
-import assert from "node:assert/strict";
+import mammoth from "mammoth";
 import { matchMarkers } from "../matcher";
 import { flagMarkers } from "../flagging";
 import { generateWordReport } from "./word";
 import type { ParsedMarker } from "../parsers/types";
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const mammoth = require("mammoth");
 
 let passed = 0;
 const failures: string[] = [];

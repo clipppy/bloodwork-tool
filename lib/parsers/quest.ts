@@ -608,17 +608,6 @@ function parseValue(token: string): number | string {
   return token;
 }
 
-/** Categorical / SEE-NOTE-style value detector. */
-function looksLikeCategoricalValue(token: string): boolean {
-  return (
-    /^SEE$/.test(token) ||
-    /^Pattern$/i.test(token) ||
-    /^NEGATIVE$/i.test(token) ||
-    /^POSITIVE$/i.test(token) ||
-    /^[A-Z]$/.test(token) // single capital letter, e.g., "A", "B"
-  );
-}
-
 // SW2-style "delta" marker rows include the previous test draw appended after
 // the unit:
 //   "238 H <200 mg/dL 280.0 H 12/03/2025 MI"
