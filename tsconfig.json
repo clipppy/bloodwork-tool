@@ -1,5 +1,9 @@
 {
   "compilerOptions": {
+    // Without an explicit target, tsc defaults to ES5 and rejects iterating a
+    // Map/Set (lib/parsers/quest.ts). Type-check only — "noEmit": true, and
+    // Next compiles with SWC — so this changes no emitted code.
+    "target": "es2017",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,

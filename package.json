@@ -25,6 +25,7 @@
     "cli": "tsx cli/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
     "docx": "^9.6.1",
     "next": "14.2.35",
     "pdf-parse": "^2.4.5",
