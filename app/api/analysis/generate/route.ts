@@ -1,19 +1,24 @@
 /**
  * POST /api/analysis/generate
  *
- * Phase 1a: deterministic Clinical Analysis document. No LLM call.
+ * Full initial-mode Clinical Analysis:
+ *   existing pipeline (parse -> match -> flag, unmodified)
+ *     -> deterministic header/chart/in-range list   (lib/analysis/deterministic)
+ *     -> de-identified payload                      (lib/analysis/deidentify)
+ *     -> askClaude()                                (lib/analysis/llm)
+ *     -> parsed narrative sections                  (lib/analysis/prompt)
+ *     -> .docx                                      (lib/generator/analysis-word)
  *
- * Accepts multipart/form-data { file: PDF, patientName?, patientDate?, intake? }
- * and reuses the EXISTING pipeline unmodified — parseQuestPdf → matchMarkers →
- * flagMarkers, the same functions /api/generate and the CLI call — then builds
- * the deterministic sections and renders the .docx.
+ * Identifiers: the patient name and DOB are used only to render the header
+ * locally and to redact the intake text. The payload that leaves this process is
+ * built from an allow-list and re-scanned by assertNoIdentifiers() before the
+ * network call.
  *
- * `intake` is accepted and deliberately unused this phase: it is read off the
- * form so the field round-trips, but it is not stored, not logged, and not sent
- * anywhere. It starts feeding the LLM sections in Phase 1b.
+ * LLM failure never loses the deterministic work: the response carries
+ * `deterministicAvailable: true`, and a retry with skipNarrative=1 returns the
+ * same document with labelled placeholders where the narrative would sit.
  *
- * No patient data is persisted: the PDF stays in a Buffer and the document is
- * streamed back.
+ * Nothing is persisted: the PDF stays in a Buffer, the document is streamed back.
  */
 
 import { NextResponse } from "next/server";
@@ -21,10 +26,26 @@ import { parseQuestPdf } from "../../../../lib/parsers/quest";
 import { matchMarkers } from "../../../../lib/matcher";
 import { flagMarkers } from "../../../../lib/flagging";
 import { buildDeterministicAnalysis } from "../../../../lib/analysis/deterministic";
+import {
+  assertNoIdentifiers,
+  buildPayload,
+  serializePayload,
+} from "../../../../lib/analysis/deidentify";
+import {
+  buildInitialAnalysisPrompt,
+  parseNarrative,
+  SYSTEM_PROMPT,
+  NarrativeParseError,
+  type AnalysisNarrative,
+} from "../../../../lib/analysis/prompt";
+import { askClaude, AnalysisLlmError } from "../../../../lib/analysis/llm";
 import { generateAnalysisReport } from "../../../../lib/generator/analysis-word";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** The analysis is a long generation; give it more room than the default. */
+const ANALYSIS_CALL_TIMEOUT_MS = 300_000;
 
 function slugify(name: string): string {
   return name
@@ -40,6 +61,20 @@ function downloadName(patientName: string, patientDate: string): string {
   return `clinical-analysis-${slug}-${patientDate}.docx`;
 }
 
+function docxResponse(buf: Buffer, filename: string, narrated: boolean): Response {
+  return new NextResponse(new Uint8Array(buf), {
+    status: 200,
+    headers: {
+      "Content-Type":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": String(buf.length),
+      "X-Analysis-Narrative": narrated ? "included" : "placeholders",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
 export async function POST(req: Request): Promise<Response> {
   let form: FormData;
   try {
@@ -51,6 +86,10 @@ export async function POST(req: Request): Promise<Response> {
   const file = form.get("file");
   const patientNameRaw = (form.get("patientName") as string | null)?.trim() || "";
   const patientDateRaw = (form.get("patientDate") as string | null)?.trim() || "";
+  const dob = (form.get("dob") as string | null)?.trim() || "";
+  const sex = (form.get("sex") as string | null)?.trim() || "";
+  const intake = (form.get("intake") as string | null) || "";
+  const skipNarrative = (form.get("skipNarrative") as string | null) === "1";
 
   const patientName = patientNameRaw || "Patient";
   const patientDate = patientDateRaw || new Date().toISOString().slice(0, 10);
@@ -82,26 +121,58 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // ----- Deterministic half (never depends on the API) -----
+  let analysis;
   try {
     const flagged = flagMarkers(matchMarkers(parsed.markers));
-    const analysis = buildDeterministicAnalysis(flagged, {
+    analysis = buildDeterministicAnalysis(flagged, {
       patientName,
       patientDate,
+      dob,
+      sex,
       collectedDate: parsed.patientMeta.collectedDate,
       reportedDate: parsed.patientMeta.reportedDate,
     });
-    const docBuf = await generateAnalysisReport(analysis);
 
-    return new NextResponse(new Uint8Array(docBuf), {
-      status: 200,
-      headers: {
-        "Content-Type":
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="${downloadName(patientNameRaw, patientDate)}"`,
-        "Content-Length": String(docBuf.length),
-        "Cache-Control": "no-store",
-      },
+    if (skipNarrative) {
+      const buf = await generateAnalysisReport(analysis, null);
+      return docxResponse(buf, downloadName(patientNameRaw, patientDate), false);
+    }
+
+    // ----- De-identified payload -----
+    const payload = buildPayload(flagged, {
+      age: analysis.age,
+      sex: analysis.sex,
+      intake,
+      patientName,
+      dob,
     });
+    const serialized = serializePayload(payload);
+    assertNoIdentifiers(serialized, { patientName, dob });
+
+    // ----- Reasoning layer -----
+    let narrative: AnalysisNarrative;
+    try {
+      const response = await askClaude(buildInitialAnalysisPrompt(payload), {
+        system: SYSTEM_PROMPT,
+        timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
+      });
+      narrative = parseNarrative(response);
+    } catch (err) {
+      const message =
+        err instanceof AnalysisLlmError || err instanceof NarrativeParseError
+          ? err.message
+          : "Unexpected error generating the clinical narrative.";
+      // The deterministic document is still fully available — tell the UI so it
+      // can offer it rather than losing the run.
+      return NextResponse.json(
+        { error: message, deterministicAvailable: true },
+        { status: 502 },
+      );
+    }
+
+    const buf = await generateAnalysisReport(analysis, narrative);
+    return docxResponse(buf, downloadName(patientNameRaw, patientDate), true);
   } catch {
     return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
   }

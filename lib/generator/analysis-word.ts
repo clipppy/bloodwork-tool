@@ -37,6 +37,7 @@ import {
   type ChartRow,
   type DeterministicAnalysis,
 } from "../analysis/deterministic";
+import type { AnalysisNarrative, NarrativeBlock } from "../analysis/prompt";
 
 // ----- Brand (matches generator/word.ts; duplicated because those constants
 // are module-private there and that file is intentionally not modified) -----
@@ -63,21 +64,24 @@ const FOOTER_NOTE =
   "Not a substitute for evaluation by a licensed physician. Recommended follow-up " +
   "testing should be ordered by the treating provider.";
 
-export interface AnalysisDocOptions {
-  /** Shown verbatim in the header block. Never leaves this machine. */
-  patientName: string;
-  patientDate: string;
-}
-
+/**
+ * Renders with the model's narrative when one is supplied; without it, the four
+ * narrative sections fall back to labelled placeholders, which is what makes a
+ * document still recoverable after an API failure.
+ */
 export async function generateAnalysisReport(
   analysis: DeterministicAnalysis,
+  narrative?: AnalysisNarrative | null,
 ): Promise<Buffer> {
-  return Packer.toBuffer(buildDocument(analysis));
+  return Packer.toBuffer(buildDocument(analysis, narrative ?? null));
 }
 
 // ----- Document assembly -----
 
-function buildDocument(analysis: DeterministicAnalysis): Document {
+function buildDocument(
+  analysis: DeterministicAnalysis,
+  narrative: AnalysisNarrative | null,
+): Document {
   const children: Array<Paragraph | Table> = [];
 
   // Title block
@@ -133,10 +137,14 @@ function buildDocument(analysis: DeterministicAnalysis): Document {
   // 1. Clinical Presentation Summary — LLM
   children.push(sectionHeading("1. Clinical Presentation Summary"));
   children.push(
-    llmPlaceholder(
-      "Clinical Presentation Summary",
-      "Written from the practitioner's intake / symptom notes. No lab values are authored here.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.clinicalPresentation)
+      : [
+          llmPlaceholder(
+            "Clinical Presentation Summary",
+            "Written from the practitioner's intake / symptom notes. No lab values are authored here.",
+          ),
+        ]),
   );
 
   // 2. Markers chart — DETERMINISTIC
@@ -160,33 +168,42 @@ function buildDocument(analysis: DeterministicAnalysis): Document {
     children.push(buildChartTable(analysis.rows));
     children.push(blank());
   }
+  // Narrative reading of the in-range markers (LLM), after the code-built list.
+  if (narrative) children.push(...renderBlocks(narrative.reassuring));
   children.push(...buildReassuringParagraphs(analysis));
 
   // 3. Root Cause Analysis — LLM
   children.push(sectionHeading("3. Root Cause Analysis by Marker/Pattern"));
   children.push(
-    llmPlaceholder(
-      "Root-Cause Analysis",
-      "Reasoning per marker/pattern, grounded in the verified chart above. The chart's values, ranges, and statuses are supplied to the model as ground truth and are never re-derived by it.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.rootCause)
+      : [
+          llmPlaceholder(
+            "Root-Cause Analysis",
+            "Reasoning per marker/pattern, grounded in the verified chart above. The chart's values, ranges, and statuses are supplied to the model as ground truth and are never re-derived by it.",
+          ),
+        ]),
   );
 
   // 4. Phased Protocol — LLM
   children.push(sectionHeading("4. Phased Functional Medicine Protocol"));
   children.push(
-    llmPlaceholder(
-      "Phased Protocol",
-      "Phase goals and interventions at category / practitioner-discretion depth. The practitioner reviews and selects the actual products.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.protocol)
+      : [
+          llmPlaceholder(
+            "Phased Protocol",
+            "Phase goals and interventions at category / practitioner-discretion depth. The practitioner reviews and selects the actual products.",
+          ),
+        ]),
   );
 
   // 5. Plain-language summary — LLM
   children.push(sectionHeading("5. Summary of Findings — In Plain Language"));
   children.push(
-    llmPlaceholder(
-      "Patient Summary",
-      "Plain-language recap for the patient.",
-    ),
+    ...(narrative
+      ? renderBlocks(narrative.patientSummary)
+      : [llmPlaceholder("Patient Summary", "Plain-language recap for the patient.")]),
   );
 
   // Footer note
@@ -401,6 +418,65 @@ function buildReassuringParagraphs(analysis: DeterministicAnalysis): Paragraph[]
     );
   }
   return out;
+}
+
+// ----- Narrative rendering -----
+
+/** Model prose -> paragraphs. Headings become sub-headings, "Goal:" lines get
+ *  their own italic label line, bullets get a bullet glyph and a hanging
+ *  indent. Text is inserted verbatim: the model authors no numbers of its own,
+ *  and nothing here reformats what it wrote. */
+function renderBlocks(blocks: NarrativeBlock[]): Paragraph[] {
+  return blocks.map((b) => {
+    switch (b.type) {
+      case "heading":
+        return new Paragraph({
+          spacing: { before: 200, after: 100 },
+          children: [
+            new TextRun({
+              text: b.text,
+              bold: true,
+              color: TEAL,
+              size: 22,
+              font: "Arial",
+            }),
+          ],
+        });
+      case "goal":
+        return new Paragraph({
+          spacing: { after: 100 },
+          indent: { left: 240 },
+          children: [
+            new TextRun({
+              text: "Goal: ",
+              bold: true,
+              italics: true,
+              color: NAVY,
+              size: 20,
+              font: "Arial",
+            }),
+            new TextRun({
+              text: b.text,
+              italics: true,
+              color: NAVY,
+              size: 20,
+              font: "Arial",
+            }),
+          ],
+        });
+      case "bullet":
+        return new Paragraph({
+          spacing: { after: 60 },
+          indent: { left: 460, hanging: 220 },
+          children: [runPlain("•  ", "000000", 20), runPlain(b.text, "000000", 20)],
+        });
+      default:
+        return new Paragraph({
+          spacing: { after: 140 },
+          children: [runPlain(b.text, "000000", 20)],
+        });
+    }
+  });
 }
 
 // ----- Placeholders for the LLM sections -----

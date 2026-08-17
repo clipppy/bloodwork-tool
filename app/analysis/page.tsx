@@ -1,11 +1,17 @@
 "use client";
 
 /**
- * /analysis — Clinical Analysis (Phase 0 scaffolding).
+ * /analysis — Clinical Analysis (initial mode).
  *
- * Blood-work upload + freeform intake textarea + a temporary "Test LLM" button
- * that proves the Anthropic wiring. No report is generated yet; the existing
- * data report at "/" is untouched.
+ * Blood-work upload + patient fields + freeform intake, producing the Robidoux-
+ * structured .docx: header/chart/in-range list built in code from the tool's
+ * flags, narrative sections written by the model from a de-identified payload.
+ *
+ * The name and DOB entered here are used to render the document header locally
+ * and to redact the intake text. They are never part of the API payload — only
+ * the computed integer age and the sex are.
+ *
+ * The existing data report at "/" is untouched.
  */
 
 import { useRef, useState } from "react";
@@ -14,17 +20,11 @@ import { useRef, useState } from "react";
 const NAVY = "#1B365D";
 const TEAL = "#4A90A4";
 
-type LlmStatus =
-  | { kind: "idle" }
-  | { kind: "testing" }
-  | { kind: "ok"; text: string }
-  | { kind: "error"; message: string };
-
 type GenStatus =
   | { kind: "idle" }
   | { kind: "processing" }
-  | { kind: "success" }
-  | { kind: "error"; message: string };
+  | { kind: "success"; narrated: boolean }
+  | { kind: "error"; message: string; deterministicAvailable?: boolean };
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -35,13 +35,13 @@ export default function AnalysisPage() {
   const [fileError, setFileError] = useState<string | null>(null);
   const [patientName, setPatientName] = useState("");
   const [patientDate, setPatientDate] = useState(todayISO());
+  const [dob, setDob] = useState("");
+  const [sex, setSex] = useState("");
   const [intake, setIntake] = useState("");
-  const [llm, setLlm] = useState<LlmStatus>({ kind: "idle" });
   const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const testing = llm.kind === "testing";
   const generating = gen.kind === "processing";
 
   function acceptFile(f: File | undefined | null) {
@@ -63,7 +63,7 @@ export default function AnalysisPage() {
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  async function generateAnalysis() {
+  async function generateAnalysis(skipNarrative = false) {
     if (!file || generating) return;
     setGen({ kind: "processing" });
     try {
@@ -71,7 +71,10 @@ export default function AnalysisPage() {
       form.append("file", file);
       form.append("patientName", patientName);
       form.append("patientDate", patientDate);
+      form.append("dob", dob);
+      form.append("sex", sex);
       form.append("intake", intake);
+      if (skipNarrative) form.append("skipNarrative", "1");
 
       const res = await fetch("/api/analysis/generate", {
         method: "POST",
@@ -80,19 +83,22 @@ export default function AnalysisPage() {
 
       if (!res.ok) {
         let message = "Something went wrong";
+        let deterministicAvailable = false;
         try {
           const data = await res.json();
           if (data?.error) message = data.error;
+          deterministicAvailable = !!data?.deterministicAvailable;
         } catch {
           /* keep generic message */
         }
-        setGen({ kind: "error", message });
+        setGen({ kind: "error", message, deterministicAvailable });
         return;
       }
 
       const cd = res.headers.get("Content-Disposition") || "";
       const match = cd.match(/filename="([^"]+)"/);
       const filename = match ? match[1] : "clinical-analysis.docx";
+      const narrated = res.headers.get("X-Analysis-Narrative") === "included";
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -104,25 +110,9 @@ export default function AnalysisPage() {
       a.remove();
       URL.revokeObjectURL(url);
 
-      setGen({ kind: "success" });
+      setGen({ kind: "success", narrated });
     } catch {
       setGen({ kind: "error", message: "Something went wrong" });
-    }
-  }
-
-  async function testLlm() {
-    if (testing) return;
-    setLlm({ kind: "testing" });
-    try {
-      const res = await fetch("/api/analysis/test-llm", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setLlm({ kind: "error", message: data?.error || "Something went wrong" });
-        return;
-      }
-      setLlm({ kind: "ok", text: data.text });
-    } catch {
-      setLlm({ kind: "error", message: "Could not reach the server" });
     }
   }
 
@@ -254,6 +244,54 @@ export default function AnalysisPage() {
           </div>
         </div>
 
+        <div className="mt-4 flex flex-col gap-4 sm:flex-row">
+          <div className="flex-1">
+            <label
+              htmlFor="analysis-dob"
+              className="mb-1 block text-sm font-medium"
+              style={{ color: NAVY }}
+            >
+              Date of birth{" "}
+              <span className="font-normal opacity-70">(optional)</span>
+            </label>
+            <input
+              id="analysis-dob"
+              type="date"
+              value={dob}
+              onChange={(e) => setDob(e.target.value)}
+              className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2"
+              style={{ borderColor: TEAL }}
+            />
+            <p className="mt-1 text-xs opacity-70">
+              Printed on the report header. Only the computed age is sent to the
+              API.
+            </p>
+          </div>
+          <div className="flex-1">
+            <label
+              htmlFor="analysis-sex"
+              className="mb-1 block text-sm font-medium"
+              style={{ color: NAVY }}
+            >
+              Sex <span className="font-normal opacity-70">(optional)</span>
+            </label>
+            <select
+              id="analysis-sex"
+              value={sex}
+              onChange={(e) => setSex(e.target.value)}
+              className="w-full rounded-md border bg-white px-3 py-2 outline-none focus:ring-2"
+              style={{ borderColor: TEAL }}
+            >
+              <option value="">Not specified</option>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+            </select>
+            <p className="mt-1 text-xs opacity-70">
+              Used for sex-specific clinical context in the narrative.
+            </p>
+          </div>
+        </div>
+
         {/* Intake / symptoms */}
         <div className="mt-6">
           <label
@@ -279,8 +317,9 @@ export default function AnalysisPage() {
             style={{ borderColor: TEAL }}
           />
           <p className="mt-1 text-xs opacity-70">
-            Leave blank for a labs-only analysis. Identifiers are never sent to
-            the API.
+            Leave blank for a labs-only analysis. The patient name, date of
+            birth, and any dates are stripped from this text before it is sent;
+            avoid pasting other identifiers.
           </p>
         </div>
 
@@ -288,7 +327,7 @@ export default function AnalysisPage() {
         <div className="mt-8 flex justify-center">
           <button
             type="button"
-            onClick={generateAnalysis}
+            onClick={() => generateAnalysis(false)}
             disabled={!file || generating}
             className="rounded-md border px-8 py-3 font-semibold text-white transition-colors"
             style={{
@@ -329,61 +368,46 @@ export default function AnalysisPage() {
           {gen.kind === "success" && (
             <div className="flex items-center justify-center gap-2 text-green-700">
               <span aria-hidden="true">✓</span>
-              <span>Analysis generated. Download starting...</span>
+              <span>
+                {gen.narrated
+                  ? "Analysis generated. Download starting..."
+                  : "Data-only analysis generated (narrative sections left as placeholders). Download starting..."}
+              </span>
             </div>
           )}
           {gen.kind === "error" && (
             <div className="text-red-600">
-              <span aria-hidden="true">⚠</span> {gen.message}{" "}
-              <button
-                type="button"
-                onClick={() => setGen({ kind: "idle" })}
-                className="underline"
-              >
-                Try again
-              </button>
+              <div>
+                <span aria-hidden="true">⚠</span> {gen.message}
+              </div>
+              <div className="mt-2 flex items-center justify-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => generateAnalysis(false)}
+                  className="underline"
+                >
+                  Try again
+                </button>
+                {gen.deterministicAvailable && (
+                  <button
+                    type="button"
+                    onClick={() => generateAnalysis(true)}
+                    className="underline"
+                    style={{ color: NAVY }}
+                  >
+                    Download without the narrative
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
 
         <p className="mt-2 text-center text-xs opacity-70">
-          Phase 1a: the header, marker chart, and in-range list are built in code
-          from the tool&apos;s flags. The four narrative sections render as
-          labelled placeholders until Phase 1b.
+          The header, marker chart, and in-range list are built in code from the
+          tool&apos;s flags. The narrative sections are written by the model from
+          a de-identified payload and reviewed by the practitioner.
         </p>
-
-        {/* Temporary Phase 0 wiring check */}
-        <div className="mt-10 rounded-md border border-dashed p-4" style={{ borderColor: TEAL }}>
-          <p className="text-sm font-medium" style={{ color: NAVY }}>
-            Phase 0 — wiring check
-          </p>
-          <p className="mt-1 text-xs opacity-70">
-            Temporary. Sends a fixed test prompt to Claude (no patient data) to
-            confirm the API key and client are working.
-          </p>
-          <button
-            type="button"
-            onClick={testLlm}
-            disabled={testing}
-            className="mt-3 rounded-md border px-5 py-2 font-semibold text-white transition-colors"
-            style={{
-              backgroundColor: testing ? "#9CA3AF" : TEAL,
-              borderColor: testing ? "#9CA3AF" : NAVY,
-              cursor: testing ? "not-allowed" : "pointer",
-            }}
-          >
-            {testing ? "Testing..." : "Test LLM"}
-          </button>
-
-          <div className="mt-3 min-h-[1.5rem] text-sm">
-            {llm.kind === "ok" && (
-              <p className="text-green-700">✓ {llm.text}</p>
-            )}
-            {llm.kind === "error" && (
-              <p className="text-red-600">⚠ {llm.message}</p>
-            )}
-          </div>
-        </div>
       </div>
     </main>
   );

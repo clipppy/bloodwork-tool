@@ -59,9 +59,13 @@ const NOTABLE_REASSURING: string[] = [
 
 // ----- Types -----
 
+export type PatientSex = "male" | "female" | "unspecified";
+
 export interface AnalysisHeader {
   patientName: string;
-  /** Not collected by the /analysis form yet — renders as an em dash. */
+  /** "10/15/1975 (Age 50)" when a DOB was entered, else an em dash. The DOB
+   *  itself is rendered here LOCALLY and never leaves this machine — only the
+   *  integer age reaches the API payload (see deidentify.ts). */
   dobAge: string;
   collected: string;
   reported: string;
@@ -95,14 +99,49 @@ export interface DeterministicAnalysis {
   header: AnalysisHeader;
   rows: ChartRow[];
   reassuring: ReassuringMarkers;
+  /** Integer age derived from the DOB, or null. This — not the DOB — is what
+   *  the API payload is allowed to carry. */
+  age: number | null;
+  sex: PatientSex;
 }
 
 export interface AnalysisInputs {
   patientName: string;
   /** Form date — the fallback when the PDF carries no collection date. */
   patientDate: string;
+  /** "YYYY-MM-DD" from the form's date input, or empty/absent. Local use only. */
+  dob?: string | null;
+  sex?: string | null;
   collectedDate?: string | null;
   reportedDate?: string | null;
+}
+
+/** Whole years between a "YYYY-MM-DD" DOB and `asOf`. null if unparseable. */
+export function computeAge(dob: string | null | undefined, asOf: Date): number | null {
+  const s = (dob ?? "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  let age = asOf.getFullYear() - y;
+  const beforeBirthday =
+    asOf.getMonth() + 1 < mo || (asOf.getMonth() + 1 === mo && asOf.getDate() < d);
+  if (beforeBirthday) age -= 1;
+  if (age < 0 || age > 130) return null;
+  return age;
+}
+
+/** "YYYY-MM-DD" -> "MM/DD/YYYY" for the header block. */
+function formatDob(dob: string | null | undefined): string | null {
+  const m = (dob ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[2]}/${m[3]}/${m[1]}` : null;
+}
+
+function normalizeSex(sex: string | null | undefined): PatientSex {
+  const s = (sex ?? "").trim().toLowerCase();
+  if (s === "male" || s === "m") return "male";
+  if (s === "female" || s === "f") return "female";
+  return "unspecified";
 }
 
 // ----- Value / range helpers -----
@@ -299,10 +338,27 @@ export function buildDeterministicAnalysis(
   const collected = formatDate(inputs.collectedDate) || inputs.patientDate;
   const reported = formatDate(inputs.reportedDate) || "—";
 
+  // Age as of the draw when the PDF gives us a collection date, else today.
+  const collectedMatch = collected.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const asOf = collectedMatch
+    ? new Date(
+        Number(collectedMatch[3]),
+        Number(collectedMatch[1]) - 1,
+        Number(collectedMatch[2]),
+      )
+    : new Date();
+  const age = computeAge(inputs.dob, asOf);
+  const dobDisplay = formatDob(inputs.dob);
+  const dobAge = dobDisplay
+    ? age !== null
+      ? `${dobDisplay} (Age ${age})`
+      : dobDisplay
+    : "—";
+
   return {
     header: {
       patientName: inputs.patientName,
-      dobAge: "—",
+      dobAge,
       collected,
       reported,
       orderingPractice: ORDERING_PRACTICE,
@@ -310,5 +366,7 @@ export function buildDeterministicAnalysis(
     },
     rows: buildChartRows(flagged),
     reassuring: buildReassuring(flagged),
+    age,
+    sex: normalizeSex(inputs.sex),
   };
 }
