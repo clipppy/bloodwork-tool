@@ -5,8 +5,8 @@
  *   existing pipeline (parse -> match -> flag, unmodified)
  *     -> deterministic header/chart/in-range list   (lib/analysis/deterministic)
  *     -> de-identified payload                      (lib/analysis/deidentify)
- *     -> askClaude()                                (lib/analysis/llm)
- *     -> parsed narrative sections                  (lib/analysis/prompt)
+ *     -> askClaudeStructured()                      (lib/analysis/llm)
+ *     -> validated structured narrative             (lib/analysis/schemas + prompt)
  *     -> .docx                                      (lib/generator/analysis-word)
  *
  * Identifiers: the patient name and DOB are used only to render the header
@@ -39,15 +39,21 @@ import {
 import {
   buildInitialAnalysisPrompt,
   buildReevalPrompt,
-  parseNarrative,
-  parseReevalNarrative,
+  toAnalysisNarrative,
+  toReevalNarrative,
   REEVAL_SYSTEM_PROMPT,
   SYSTEM_PROMPT,
   NarrativeParseError,
   type AnalysisNarrative,
   type ReevalNarrative,
 } from "../../../../lib/analysis/prompt";
-import { askClaude, AnalysisLlmError } from "../../../../lib/analysis/llm";
+import {
+  INITIAL_NARRATIVE_SCHEMA,
+  REEVAL_NARRATIVE_SCHEMA,
+  type InitialNarrativeJson,
+  type ReevalNarrativeJson,
+} from "../../../../lib/analysis/schemas";
+import { askClaudeStructured, AnalysisLlmError } from "../../../../lib/analysis/llm";
 import {
   ingestPriorReport,
   PriorReportError,
@@ -257,21 +263,27 @@ export async function POST(req: Request): Promise<Response> {
         age: analysis.age,
         sex: analysis.sex,
         intake,
-        patientName,
+        // The TYPED name, not the "Patient" display fallback: the fallback is
+        // not an identifier and collides with the payload's own `patient` key.
+        patientName: patientNameRaw,
         dob,
         priorPanelInterval: interval,
         priorReportText: ingested.redactedText,
       });
       const serialized = serializePayload(payload);
-      assertNoIdentifiers(serialized, { patientName, dob });
+      assertNoIdentifiers(serialized, { patientName: patientNameRaw, dob });
 
       let reeval: ReevalNarrative;
       try {
-        const response = await askClaude(buildReevalPrompt(payload), {
-          system: REEVAL_SYSTEM_PROMPT,
-          timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
-        });
-        reeval = parseReevalNarrative(response);
+        const json = await askClaudeStructured<ReevalNarrativeJson>(
+          buildReevalPrompt(payload),
+          {
+            system: REEVAL_SYSTEM_PROMPT,
+            schema: REEVAL_NARRATIVE_SCHEMA as unknown as Record<string, unknown>,
+            timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
+          },
+        );
+        reeval = toReevalNarrative(json);
       } catch (err) {
         const message =
           err instanceof AnalysisLlmError || err instanceof NarrativeParseError
@@ -303,20 +315,25 @@ export async function POST(req: Request): Promise<Response> {
       age: analysis.age,
       sex: analysis.sex,
       intake,
-      patientName,
+      // See above: the typed name, never the display fallback.
+      patientName: patientNameRaw,
       dob,
     });
     const serialized = serializePayload(payload);
-    assertNoIdentifiers(serialized, { patientName, dob });
+    assertNoIdentifiers(serialized, { patientName: patientNameRaw, dob });
 
     // ----- Reasoning layer -----
     let narrative: AnalysisNarrative;
     try {
-      const response = await askClaude(buildInitialAnalysisPrompt(payload), {
-        system: SYSTEM_PROMPT,
-        timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
-      });
-      narrative = parseNarrative(response);
+      const json = await askClaudeStructured<InitialNarrativeJson>(
+        buildInitialAnalysisPrompt(payload),
+        {
+          system: SYSTEM_PROMPT,
+          schema: INITIAL_NARRATIVE_SCHEMA as unknown as Record<string, unknown>,
+          timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
+        },
+      );
+      narrative = toAnalysisNarrative(json);
     } catch (err) {
       const message =
         err instanceof AnalysisLlmError || err instanceof NarrativeParseError
@@ -332,7 +349,19 @@ export async function POST(req: Request): Promise<Response> {
 
     const buf = await generateAnalysisReport(analysis, narrative);
     return docxResponse(buf, downloadName(patientNameRaw, patientDate), true);
-  } catch {
-    return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+  } catch (err) {
+    // Without this, an unexpected failure reaches the practitioner as a bare
+    // "Something went wrong" with nothing in the log to diagnose it.
+    console.error("[analysis/generate] unexpected failure:", err);
+    return NextResponse.json(
+      {
+        error:
+          err instanceof Error && err.message
+            ? `Could not build the analysis: ${err.message}`
+            : "Something went wrong",
+        deterministicAvailable: true,
+      },
+      { status: 500 },
+    );
   }
 }

@@ -449,10 +449,13 @@ export function assertNoIdentifiers(
   const hay = serialized.toLowerCase();
   const offenders: string[] = [];
 
+  // "Patient" is the document's display fallback when the practitioner leaves
+  // the field blank; it is not an identifier, and it collides with the
+  // payload's own `patient` key.
   const nameTokens = identifiers.patientName
     .split(/\s+/)
     .map((t) => t.replace(/[^A-Za-z'-]/g, ""))
-    .filter((t) => t.length >= 3);
+    .filter((t) => t.length >= 3 && t.toLowerCase() !== "patient");
   for (const t of nameTokens) {
     if (new RegExp(`\\b${escapeRe(t.toLowerCase())}\\b`).test(hay)) {
       offenders.push(`patient name token "${t}"`);

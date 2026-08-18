@@ -1,6 +1,10 @@
 /**
  * Isolated Anthropic client for the Clinical Analysis feature.
  *
+ * The narrative comes back as STRUCTURED output: the caller supplies a JSON
+ * schema, the API enforces the shape, and this module returns the parsed
+ * object. Section assembly therefore never depends on parsing prose.
+ *
  * Nothing else in the tool imports this file, and this file imports nothing
  * from the tool. The existing report path (parser → matcher → flagging →
  * generator/word) must never depend on the API being reachable: every failure
@@ -8,6 +12,8 @@
  *
  * The key is read from ANTHROPIC_API_KEY at call time (not module load), so a
  * missing key is a clean per-request error rather than an import-time crash.
+ *
+ * One entry point: askClaudeStructured().
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -39,23 +45,30 @@ export interface AskClaudeOptions {
   timeoutMs?: number;
 }
 
+export interface AskClaudeStructuredOptions extends AskClaudeOptions {
+  /** JSON Schema the response must satisfy. Enforced by the API. */
+  schema: Record<string, unknown>;
+}
+
 /**
- * Send a prompt to Claude and return the response text.
+ * Send a prompt and get back an object matching `schema`.
  *
- * Throws `AnalysisLlmError` on a missing key, a timeout, a network failure, an
- * API error, or a response that carries no text (e.g. a safety refusal).
+ * The shape is enforced server-side, so a missing section is an API-level
+ * failure rather than a silently half-empty document. Throws
+ * `AnalysisLlmError` on a missing key, a timeout, a network failure, an API
+ * error, a refusal, a truncated response, or output that is not the expected
+ * JSON.
  */
-export async function askClaude(
+export async function askClaudeStructured<T>(
   prompt: string,
-  options: AskClaudeOptions = {},
-): Promise<string> {
+  options: AskClaudeStructuredOptions,
+): Promise<T> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
     throw new AnalysisLlmError(
       "ANTHROPIC_API_KEY is not set. Add it to .env.local and restart the app.",
     );
   }
-
   if (!prompt.trim()) {
     throw new AnalysisLlmError("Cannot send an empty prompt.");
   }
@@ -69,6 +82,7 @@ export async function askClaude(
         model: ANALYSIS_MODEL,
         max_tokens: MAX_TOKENS,
         ...(options.system ? { system: options.system } : {}),
+        output_config: { format: { type: "json_schema", schema: options.schema } },
         messages: [{ role: "user", content: prompt }],
       },
       { timeout: options.timeoutMs ?? ANALYSIS_TIMEOUT_MS },
@@ -82,6 +96,11 @@ export async function askClaude(
       "Claude declined to answer this request. Review the intake text and try again.",
     );
   }
+  if (response.stop_reason === "max_tokens") {
+    throw new AnalysisLlmError(
+      "The response was cut off before it was complete. Try again, or shorten the intake text.",
+    );
+  }
 
   const text = response.content
     .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -93,7 +112,13 @@ export async function askClaude(
     throw new AnalysisLlmError("Claude returned an empty response.");
   }
 
-  return text;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new AnalysisLlmError(
+      "Claude's response was not valid JSON for the requested format.",
+    );
+  }
 }
 
 /** Map SDK errors to a short message that is safe to show in the UI. */
