@@ -14,7 +14,7 @@
  * The existing data report at "/" is untouched.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ----- Brand palette (matches the existing report page / Word generator) -----
 const NAVY = "#1B365D";
@@ -36,6 +36,16 @@ type GenStatus =
   | { kind: "success"; narrated: boolean }
   | { kind: "error"; message: string; deterministicAvailable?: boolean };
 
+/** Parsing, matching and flagging finish in about a second; everything after
+ *  that is the model writing. Two coarse phases, no fake granularity. */
+const READING_LABS_SECONDS = 5;
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -56,11 +66,24 @@ export default function AnalysisPage() {
   const [sex, setSex] = useState("");
   const [intake, setIntake] = useState("");
   const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
+  const [elapsed, setElapsed] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const priorInputRef = useRef<HTMLInputElement>(null);
 
   const generating = gen.kind === "processing";
+
+  // Live elapsed counter for the long generate call, so an indeterminate
+  // spinner is visibly progressing rather than apparently stuck.
+  useEffect(() => {
+    if (!generating) return;
+    const started = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [generating]);
 
   function acceptFile(f: File | undefined | null) {
     if (!f) return;
@@ -620,27 +643,39 @@ export default function AnalysisPage() {
 
         <div className="mt-4 min-h-[2rem] text-center">
           {gen.kind === "processing" && (
-            <div
-              className="flex items-center justify-center gap-2"
-              style={{ color: NAVY }}
-            >
-              <svg
-                className="animate-spin"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
+            <div style={{ color: NAVY }}>
+              <div
+                className="flex items-center justify-center gap-2"
+                aria-live="polite"
               >
-                <circle cx="12" cy="12" r="10" stroke="#E5E7EB" strokeWidth="4" />
-                <path
-                  d="M22 12a10 10 0 0 1-10 10"
-                  stroke={TEAL}
-                  strokeWidth="4"
-                  strokeLinecap="round"
-                />
-              </svg>
-              <span>Building the analysis...</span>
+                <svg
+                  className="animate-spin"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="10" stroke="#E5E7EB" strokeWidth="4" />
+                  <path
+                    d="M22 12a10 10 0 0 1-10 10"
+                    stroke={TEAL}
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span>
+                  {elapsed < READING_LABS_SECONDS
+                    ? "Reading labs..."
+                    : "Writing the analysis..."}
+                </span>
+                <span className="font-mono tabular-nums opacity-70">
+                  {formatElapsed(elapsed)}
+                </span>
+              </div>
+              <p className="mt-1 text-xs opacity-70">
+                This usually takes 2-3 minutes &mdash; you can leave this tab open.
+              </p>
             </div>
           )}
           {gen.kind === "success" && (
