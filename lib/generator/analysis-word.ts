@@ -37,13 +37,15 @@ import {
   PRIOR_NOT_FOUND,
   PRIOR_PENDING,
   type ChartRow,
-  type ComparisonGroup,
+  type ComparisonRow,
   type DeterministicAnalysis,
 } from "../analysis/deterministic";
-import type {
-  AnalysisNarrative,
-  NarrativeBlock,
-  ReevalNarrative,
+import { groupBySystem } from "../analysis/body-systems";
+import {
+  SYMPTOM_TAG_LABEL,
+  type AnalysisNarrative,
+  type NarrativeBlock,
+  type ReevalNarrative,
 } from "../analysis/prompt";
 
 // ----- Brand (matches generator/word.ts; duplicated because those constants
@@ -192,8 +194,13 @@ function buildDocument(
       }),
     );
   } else {
-    children.push(buildChartTable(analysis.rows));
-    children.push(blank());
+    // One table per body system, in taxonomy order. Row content is untouched —
+    // only the headings and the split points are new.
+    for (const group of groupBySystem(analysis.rows, (r) => r.marker)) {
+      children.push(groupHeading(group.system));
+      children.push(buildChartTable(group.items));
+      children.push(blank());
+    }
   }
   // Narrative reading of the in-range markers (LLM), after the code-built list.
   if (narrative) children.push(...renderBlocks(narrative.reassuring));
@@ -378,9 +385,18 @@ function buildReevalDocument(
       }),
     );
   } else {
-    for (const group of analysis.comparisonGroups) {
-      children.push(groupHeading(group.label));
-      children.push(buildComparisonTable(group));
+    // Re-grouped from the deterministic category buckets into the body-system
+    // taxonomy so both modes read the same way. Rows themselves are unchanged;
+    // alphabetical order inside a heading matches the previous per-category
+    // tables and keeps two runs over one panel byte-identical.
+    const comparisonRows = analysis.comparisonGroups.flatMap((g) => g.rows);
+    for (const group of groupBySystem(comparisonRows, (r) => r.marker)) {
+      children.push(groupHeading(group.system));
+      children.push(
+        buildComparisonTable(
+          group.items.slice().sort((a, b) => a.marker.localeCompare(b.marker)),
+        ),
+      );
       children.push(blank());
     }
     children.push(
@@ -530,7 +546,7 @@ const RC_LAB = 1400;
 const RC_OPTIMAL = 1600;
 const RC_STATUS = 1360;
 
-function buildComparisonTable(group: ComparisonGroup): Table {
+function buildComparisonTable(rows: ComparisonRow[]): Table {
   const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
   const head = new TableRow({
     tableHeader: true,
@@ -544,7 +560,7 @@ function buildComparisonTable(group: ComparisonGroup): Table {
     ],
   });
 
-  const body = group.rows.map(
+  const body = rows.map(
     (r) =>
       new TableRow({
         children: [
@@ -884,6 +900,30 @@ function renderBlocks(blocks: NarrativeBlock[]): Paragraph[] {
           children,
         });
       }
+      case "symptomTags":
+        // Patient-reported symptoms this pattern may explain. Reasoning, not
+        // data — set apart from the bullets so it never reads as a lab finding.
+        return new Paragraph({
+          spacing: { before: 60, after: 160 },
+          indent: { left: 460 },
+          children: [
+            new TextRun({
+              text: SYMPTOM_TAG_LABEL,
+              bold: true,
+              italics: true,
+              color: TEAL,
+              size: 18,
+              font: "Arial",
+            }),
+            new TextRun({
+              text: b.text,
+              italics: true,
+              color: GREY,
+              size: 18,
+              font: "Arial",
+            }),
+          ],
+        });
       default:
         return new Paragraph({
           spacing: { after: 140 },

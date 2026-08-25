@@ -21,6 +21,8 @@ const stringArray = (description: string) => ({
   items: { type: "string" as const },
 });
 
+// Shared by the Initial rootCauseAnalysis and the Re-eval comparativeRootCause,
+// so symptomTags is defined once and required in both.
 const patternBlock = {
   type: "object" as const,
   properties: {
@@ -30,8 +32,14 @@ const patternBlock = {
         "Heading naming the markers in this pattern and the direction they moved.",
     },
     bullets: stringArray("One point per line: mechanism, contributing factor, or what to confirm next."),
+    symptomTags: stringArray(
+      "Short tags naming the patient-reported symptoms from the intake that this " +
+        "pattern plausibly explains. Reasoning only: no lab values, no numbers, no " +
+        "units, no dates, no names or other identifiers. Empty array when no intake " +
+        "was provided or when no reported symptom maps to this pattern.",
+    ),
   },
-  required: ["pattern", "bullets"],
+  required: ["pattern", "bullets", "symptomTags"],
   additionalProperties: false,
 };
 
@@ -91,7 +99,7 @@ export const INITIAL_NARRATIVE_SCHEMA = {
 export interface InitialNarrativeJson {
   clinicalPresentation: string[];
   reassuringNarrative: string;
-  rootCauseAnalysis: Array<{ pattern: string; bullets: string[] }>;
+  rootCauseAnalysis: Array<{ pattern: string; bullets: string[]; symptomTags: string[] }>;
   phasedProtocol: Array<{ phase: string; goal: string; bullets: string[] }>;
   patientSummary: string[];
 }
@@ -160,7 +168,7 @@ export const REEVAL_NARRATIVE_SCHEMA = {
 export interface ReevalNarrativeJson {
   priorMarkers: Array<{ name: string; priorValue: string; comparable: boolean }>;
   overview: string[];
-  comparativeRootCause: Array<{ pattern: string; bullets: string[] }>;
+  comparativeRootCause: Array<{ pattern: string; bullets: string[]; symptomTags: string[] }>;
   updatedProtocol: Array<{ phase: string; goal: string; bullets: string[] }>;
   patientSummary: string[];
 }

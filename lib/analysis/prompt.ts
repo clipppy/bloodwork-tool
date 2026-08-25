@@ -20,7 +20,15 @@ import type { InitialNarrativeJson, ReevalNarrativeJson } from "./schemas";
 
 // ----- Parsed narrative -----
 
-export type NarrativeBlockType = "heading" | "goal" | "bullet" | "paragraph";
+export type NarrativeBlockType =
+  | "heading"
+  | "goal"
+  | "bullet"
+  | "paragraph"
+  /** Patient-reported symptoms a root-cause pattern explains. Reasoning only —
+   *  carries no lab value, and the document renders it as a tag strip under the
+   *  pattern's bullets. */
+  | "symptomTags";
 
 export interface NarrativeBlock {
   type: NarrativeBlockType;
@@ -34,6 +42,12 @@ export interface AnalysisNarrative {
   protocol: NarrativeBlock[];
   patientSummary: NarrativeBlock[];
 }
+
+/** Joins the symptom tags into the single strip the document renders. */
+export const SYMPTOM_TAG_SEPARATOR = "  ·  ";
+
+/** Label the document prints ahead of the tag strip. */
+export const SYMPTOM_TAG_LABEL = "Reported symptoms this pattern may explain: ";
 
 export class NarrativeParseError extends Error {
   constructor(message: string) {
@@ -91,11 +105,22 @@ function fieldSpec(hasIntake: boolean): string {
     "    disease, acute-phase inflammation, renal impairment, and so on). Choose the",
     "    markers that matter for this picture; do not list all of them.",
     "",
-    "- rootCauseAnalysis: array of { pattern, bullets }. Group the flagged markers",
-    "    into clinical patterns rather than walking the list one row at a time.",
-    "    `pattern` names the markers involved and their direction. `bullets` give the",
-    "    candidate mechanisms, the contributing factors from the intake, what the",
-    "    finding argues for or against, and any confirmatory testing to trend.",
+    "- rootCauseAnalysis: array of { pattern, bullets, symptomTags }. Group the",
+    "    flagged markers into clinical patterns rather than walking the list one row",
+    "    at a time. `pattern` names the markers involved and their direction.",
+    "    `bullets` give the candidate mechanisms, the contributing factors from the",
+    "    intake, what the finding argues for or against, and any confirmatory testing",
+    "    to trend.",
+    "    * `symptomTags`: short tags — two or three words each, four to six tags at",
+    "      most — naming the symptoms THE PATIENT REPORTED in the intake that this",
+    "      pattern plausibly explains, e.g. 'afternoon fatigue', 'cold hands',",
+    "      'hair thinning'. Use the patient's own reported complaints; do not invent",
+    "      symptoms the intake does not state, and do not restate a marker name as a",
+    "      symptom. These are reasoning, not data: no lab values, no numbers, no",
+    "      units, no dates, and no names or other identifiers.",
+    hasIntake
+      ? "      Return an empty array for a pattern that no reported symptom maps to."
+      : "      No intake was provided, so return an empty array for every pattern.",
     "",
     "- phasedProtocol: array of { phase, goal, bullets }. Three or four phases,",
     "    ending with a sustain-and-monitor phase that names the retest interval.",
@@ -243,11 +268,20 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     "    against, and the headline direction of travel. Mention the interval only if",
     "    it was provided above.",
     "",
-    "- comparativeRootCause: array of { pattern, bullets }. Group into clinical",
-    "    patterns, not a marker walk. `pattern` names the markers and the direction",
-    "    they moved. `bullets` cover what changed and what held, the candidate",
-    "    mechanisms, whether the prior protocol plausibly explains the change, and",
-    "    what to confirm or trend next.",
+    "- comparativeRootCause: array of { pattern, bullets, symptomTags }. Group into",
+    "    clinical patterns, not a marker walk. `pattern` names the markers and the",
+    "    direction they moved. `bullets` cover what changed and what held, the",
+    "    candidate mechanisms, whether the prior protocol plausibly explains the",
+    "    change, and what to confirm or trend next.",
+    "    * `symptomTags`: short tags — two or three words each, four to six tags at",
+    "      most — naming the symptoms THE PATIENT REPORTED that this pattern",
+    "      plausibly explains, e.g. 'afternoon fatigue', 'cold hands'. Draw them from",
+    "      the intake notes and, where the prior report records the presenting",
+    "      complaints, from that. Do not invent symptoms neither source states, and",
+    "      do not restate a marker name as a symptom. These are reasoning, not data:",
+    "      no lab values, no numbers, no units, no dates, and no names or other",
+    "      identifiers. Return an empty array for a pattern that no reported symptom",
+    "      maps to.",
     "",
     "- updatedProtocol: array of { phase, goal, bullets } that builds on the prior",
     "    report's protocol rather than replacing it. Every bullet MUST begin with one",
@@ -319,6 +353,17 @@ function patternsToBlocks(
       field,
     )) {
       blocks.push({ type: "bullet", text: bullet });
+    }
+    // Symptom tags are optional in practice: a labs-only run, or a pattern that
+    // no reported symptom maps to, legitimately returns an empty array, and
+    // that must not fail the whole narrative.
+    const tags = requireNonEmptyStrings(
+      (entry as { symptomTags?: unknown })?.symptomTags ?? [],
+      field,
+      { allowEmpty: true },
+    );
+    if (tags.length > 0) {
+      blocks.push({ type: "symptomTags", text: tags.join(SYMPTOM_TAG_SEPARATOR) });
     }
   }
   return blocks;

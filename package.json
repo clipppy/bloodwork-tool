@@ -15,13 +15,14 @@
     "diff:flagging": "tsx scripts/validate-flagging.ts --diff",
     "reconcile": "tsx scripts/reconcile.ts",
     "check:ascii": "tsx scripts/check-ascii.ts",
-    "check": "npm run check:ascii && npm run test:parser && npm run test:matcher && npm run test:range-parse && npm run test:flagging && npm run test:mthfr && npm run validate:flagging && npm run reconcile",
+    "check": "npm run check:ascii && npm run test:parser && npm run test:matcher && npm run test:range-parse && npm run test:flagging && npm run test:mthfr && npm run test:body-systems && npm run validate:flagging && npm run reconcile",
     "extract:narratives": "tsx scripts/extract-narratives.ts",
     "test:parser": "tsx scripts/test-parser.ts",
     "test:range-parse": "tsx lib/flagging/range-parse.test.ts",
     "test:flagging": "tsx lib/flagging/index.test.ts",
     "test:matcher": "tsx lib/matcher/index.test.ts",
     "test:mthfr": "tsx lib/generator/mthfr-render.test.ts",
+    "test:body-systems": "tsx lib/analysis/body-systems.test.ts",
     "cli": "tsx cli/index.ts"
   },
   "dependencies": {
