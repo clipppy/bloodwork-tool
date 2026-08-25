@@ -26,13 +26,16 @@ import type { FlaggedMarker } from "../flagging";
 /** Print order for the report. "Additional Markers" is the catch-all and is
  *  always last. */
 export const BODY_SYSTEMS = [
-  "Iron & Hematology",
-  "Metabolic & Lipid",
+  "Iron Status",
+  "Immune Status / CBC",
+  "Blood Sugar & Insulin Metabolism",
+  "Cholesterol, Heart & Vascular Health",
   "Thyroid",
-  "Steroid Hormone Pathway",
-  "Liver & Kidney",
-  "Vitamins & Minerals",
-  "Inflammation & Immune",
+  "Hormones & Adrenal",
+  "Liver & Gall Bladder",
+  "Kidney",
+  "Vitamins, Minerals & Electrolytes",
+  "Food Sensitivity Panel",
   "Additional Markers",
 ] as const;
 
@@ -51,12 +54,14 @@ export const CATCH_ALL_SYSTEM: BodySystem = "Additional Markers";
  * where they are clinically read rather than where the chart filed them.
  */
 export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
-  "Iron & Hematology": [
-    // Iron studies
+  "Iron Status": [
     "Iron",
     "Ferritin",
     "% Iron Saturation",
     "TIBC (Total Iron Binding Capacity)",
+  ],
+
+  "Immune Status / CBC": [
     // Red cell line and indices
     "RBC (Red Blood Cell)",
     "Hemoglobin",
@@ -69,8 +74,7 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Platelets",
     "MPV (Mean Platelet Volume)",
     // White cell count and differential — the CBC is read as one panel, so the
-    // percentage and absolute differentials stay with WBC rather than moving to
-    // Inflammation & Immune.
+    // percentage and absolute differentials stay with WBC.
     "WBC (White Blood Cell)",
     "Neutrophils",
     "Lymphocytes",
@@ -84,14 +88,27 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Absolute Basophils",
     // Blood typing
     "ABO Group",
+    // Cell-turnover / hemolysis
+    "LDH (Lactate-Dehydrogenase)",
+    // Autoimmune
+    "ANA (Anti-nuclear Antibodies)",
+    "Rheumatoid Factor",
+    // Viral / infectious burden
+    "EBV Early Antigen IgG",
+    "EBV Viral Capsid IgM",
+    "EBV Viral Capsid IgG",
+    "EBV Nuclear AG IgG",
+    "Candida Albicans",
   ],
 
-  "Metabolic & Lipid": [
-    // Glycemic / metabolic
+  "Blood Sugar & Insulin Metabolism": [
     "Glucose",
     "Insulin",
     "Hemoglobin A1C",
     "Leptin",
+  ],
+
+  "Cholesterol, Heart & Vascular Health": [
     // Standard lipid panel
     "Cholesterol",
     "LDL (Low Density Lipoprotein Cholesterol)",
@@ -121,6 +138,9 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Arachidonic Acid/EPA Ratio",
     "Linoleic Acid",
     "Omega Check",
+    // Vascular inflammation and risk
+    "Hs-CRP",
+    "Homocysteine",
   ],
 
   Thyroid: [
@@ -133,7 +153,7 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Thyroglobulin Antibodies",
   ],
 
-  "Steroid Hormone Pathway": [
+  "Hormones & Adrenal": [
     // Adrenal / precursors
     "Cortisol",
     "Pregnenolone",
@@ -160,8 +180,7 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "PSA % Free",
   ],
 
-  "Liver & Kidney": [
-    // Hepatic
+  "Liver & Gall Bladder": [
     "AST (Aspartate Aminotransferase)",
     "ALT (Alanine Aminotransferase)",
     "Alkaline Phosphatase",
@@ -174,7 +193,9 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     // Pancreatic enzymes — reported on the same hepatic/abdominal panel
     "Amylase",
     "Lipase",
-    // Renal
+  ],
+
+  Kidney: [
     "BUN (Blood Urea Nitrogen)",
     "Creatinine",
     "BUN/Creatinine Ratio",
@@ -191,7 +212,7 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Uric Acid",
   ],
 
-  "Vitamins & Minerals": [
+  "Vitamins, Minerals & Electrolytes": [
     // Vitamin D
     "Vitamin D 25-OH",
     "Vitamin D 1,25 (OH)2 Total",
@@ -212,24 +233,7 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Mercury Blood",
   ],
 
-  "Inflammation & Immune": [
-    "Hs-CRP",
-    "Homocysteine",
-    "LDH (Lactate-Dehydrogenase)",
-    // Autoimmune
-    "ANA (Anti-nuclear Antibodies)",
-    "Rheumatoid Factor",
-    // Viral / infectious burden
-    "EBV Early Antigen IgG",
-    "EBV Viral Capsid IgM",
-    "EBV Viral Capsid IgG",
-    "EBV Nuclear AG IgG",
-    "Candida Albicans",
-  ],
-
-  // Variable per-patient food-sensitivity panel: not a body system, so it
-  // prints last with anything else the map does not recognise.
-  "Additional Markers": [
+  "Food Sensitivity Panel": [
     "Casein",
     "Cacao",
     "Corn",
@@ -237,6 +241,10 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Wheat",
     "Yeast",
   ],
+
+  // Catch-all. Nothing in the dictionary is filed here on purpose; it exists so
+  // an unmatched marker, or a name carried in from a prior report, still prints.
+  "Additional Markers": [],
 };
 
 /** Lookup key: case-folded, whitespace-collapsed canonical name. */

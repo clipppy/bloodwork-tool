@@ -64,6 +64,7 @@ const CHIP_LAB = "C00000"; // outside the standard lab range
 const CHIP_OPTIMAL = "B26A00"; // inside the lab range, outside the functional target
 const CHIP_IN_RANGE = "2E7D32"; // re-eval only: back inside both ranges
 const CHIP_NEUTRAL = "6E6E6E"; // re-eval only: not retested / nothing to compare
+const CHIP_NEW = "4A5B6E"; // re-eval only: no prior value, so nothing to trend
 
 const PAGE_WIDTH = 12240;
 const PAGE_HEIGHT = 15840;
@@ -77,12 +78,13 @@ const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2; // 9360
 // columns; Word happens to re-fit from the cell widths, but every other
 // renderer (Pages, LibreOffice, Google Docs, most PDF converters) honours the
 // grid and squeezes the table into an unreadable mess. The grid is the fix.
-const COL_MARKER = 2000;
-const COL_RESULT = 2060;
+const COL_MARKER = 1900;
+const COL_RESULT = 2000;
 const COL_LAB = 1700;
-const COL_OPTIMAL = 1800;
-// Wide enough for the longest chip label ("Above Optimal*") on one line.
-const COL_STATUS = 1800;
+const COL_OPTIMAL = 1760;
+// Wide enough for the longest chip label ("Out of Lab Range") on one line; the
+// direction sits on its own second line, so nothing ever breaks mid-word.
+const COL_STATUS = 2000;
 const CHART_GRID = [COL_MARKER, COL_RESULT, COL_LAB, COL_OPTIMAL, COL_STATUS];
 
 // Header block: label/value twice across.
@@ -119,9 +121,18 @@ export async function generateReevalReport(
   analysis: DeterministicAnalysis,
   priorReportIngested: boolean,
   narrative?: ReevalNarrative | null,
+  /** Prior draw date, "YYYY-MM-DD" as the form collects it. Optional so the
+   *  existing call sites keep compiling; the Previous Draw row is omitted
+   *  rather than guessed when it is not supplied. */
+  priorPanelDate?: string | null,
 ): Promise<Buffer> {
   return Packer.toBuffer(
-    buildReevalDocument(analysis, priorReportIngested, narrative ?? null),
+    buildReevalDocument(
+      analysis,
+      priorReportIngested,
+      narrative ?? null,
+      priorPanelDate ?? null,
+    ),
   );
 }
 
@@ -307,6 +318,7 @@ function buildReevalDocument(
   analysis: DeterministicAnalysis,
   priorReportIngested: boolean,
   narrative: ReevalNarrative | null,
+  priorPanelDate: string | null,
 ): Document {
   const children: Array<Paragraph | Table> = [];
   const h = analysis.header;
@@ -352,7 +364,7 @@ function buildReevalDocument(
       ],
     }),
     new Paragraph({
-      spacing: { after: 200 },
+      spacing: { after: 120 },
       children: [
         runItalic(
           priorReportIngested
@@ -376,6 +388,13 @@ function buildReevalDocument(
       ],
     }),
   );
+
+  // Which two draws this report compares. Dates only: the panel's composition
+  // cannot be derived here without the full parsed marker list (this generator
+  // only receives the flagged rows plus the in-range names), and a partial
+  // composition would read as complete, so it is omitted rather than guessed.
+  children.push(buildDrawTable(analysis, priorPanelDate));
+  children.push(blank());
 
   // Part I — Overview (LLM, 2b)
   children.push(sectionHeading("Part I: Overview"));
@@ -448,6 +467,21 @@ function buildReevalDocument(
           ),
         ]),
   );
+
+  // What's already improving — reinforced, not changed. Heading omitted when
+  // the model returned nothing, rather than printing an empty section.
+  if (narrative && narrative.alreadyImproving.length > 0) {
+    children.push(
+      sectionHeading("What's Already Improving (worth reinforcing, not changing)"),
+    );
+    children.push(...renderBlocks(narrative.alreadyImproving));
+  }
+
+  // Markers the prior report flagged that this draw did not re-test.
+  if (narrative && narrative.backgroundFindings.length > 0) {
+    children.push(sectionHeading("Background Findings Not Re-Tested This Draw"));
+    children.push(...renderBlocks(narrative.backgroundFindings));
+  }
 
   // Part IV — updated protocol (LLM, 2b)
   children.push(sectionHeading("Part IV: Phased Protocol (Updated from Prior Plan)"));
@@ -531,7 +565,7 @@ function buildLegend(): Paragraph {
       }),
       runPlain("   "),
       new TextRun({
-        text: "  Out of Functional Optimal Range  ",
+        text: "  Out of Optimal  ",
         bold: true,
         color: "FFFFFF",
         size: 18,
@@ -540,13 +574,23 @@ function buildLegend(): Paragraph {
       }),
       runPlain("   "),
       new TextRun({
-        text: "  Improved Since Last Panel  ",
+        text: "  In Range  ",
         bold: true,
-        color: GREY,
+        color: "FFFFFF",
         size: 18,
         font: "Arial",
-        shading: { fill: LIGHT_GREY, type: ShadingType.CLEAR, color: "auto" },
+        shading: { fill: CHIP_IN_RANGE, type: ShadingType.CLEAR, color: "auto" },
       }),
+      runPlain("   "),
+      new TextRun({
+        text: "  New Finding  ",
+        bold: true,
+        color: "FFFFFF",
+        size: 18,
+        font: "Arial",
+        shading: { fill: CHIP_NEW, type: ShadingType.CLEAR, color: "auto" },
+      }),
+      runItalic("     New Finding = no prior value to compare against.", GREY, 18),
     ],
   });
 }
@@ -565,13 +609,13 @@ function groupHeading(label: string): Paragraph {
 
 // Comparison columns sum to CONTENT_WIDTH (9360). Same rule as CHART_GRID:
 // whatever is here must also be emitted as the table's columnWidths.
-const RC_MARKER = 1800;
-const RC_PRIOR = 1420;
-const RC_CURRENT = 1420;
-const RC_LAB = 1410;
-const RC_OPTIMAL = 1410;
-// Fits the longest re-eval chip ("Out of Optimal*") on one line.
-const RC_STATUS = 1900;
+const RC_MARKER = 1700;
+const RC_PRIOR = 1400;
+const RC_CURRENT = 1400;
+const RC_LAB = 1430;
+const RC_OPTIMAL = 1430;
+// Fits the longest re-eval chip ("Out of Lab Range") on one line.
+const RC_STATUS = 2000;
 const RC_GRID = [RC_MARKER, RC_PRIOR, RC_CURRENT, RC_LAB, RC_OPTIMAL, RC_STATUS];
 
 function buildComparisonTable(rows: ComparisonRow[]): Table {
@@ -595,10 +639,16 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
         children: [
           chartCell(shortMarkerName(r.marker), RC_MARKER, { bold: true }),
           priorCell(r.prior, RC_PRIOR),
-          chartCell(r.current, RC_CURRENT),
+          chartCell(r.current, RC_CURRENT, { bold: true }),
           chartCell(r.labRange, RC_LAB),
           chartCell(displayOptimalRange(r.labRange, r.optimalRange), RC_OPTIMAL),
-          statusCell(r.status, r.trend, RC_STATUS, r.withinLabRange),
+          statusCell(
+            r.status,
+            r.trend,
+            RC_STATUS,
+            r.withinLabRange,
+            r.prior === PRIOR_NOT_FOUND || r.prior === PRIOR_PENDING,
+          ),
         ],
       }),
   );
@@ -653,32 +703,32 @@ function statusCell(
   trend: string,
   width: number,
   withinLabRange: boolean | null,
+  isNew: boolean,
 ): TableCell {
   // The re-eval status cell carries two independent signals: where the value
   // sits (the chip) and which way it moved (the trend). Shading the PARAGRAPH
   // rather than the cell keeps the chip's colour without swallowing the
   // trend's own green/red, which is the column's most-read line.
   const chip = statusChip(status, withinLabRange);
-  return new TableCell({
-    borders: bordersAll(),
-    width: { size: width, type: WidthType.DXA },
-    margins: { top: 80, bottom: 80, left: 80, right: 80 },
-    children: [
-      new Paragraph({
+
+  // With no prior value there is nothing to trend, and the computed label
+  // degrades to "Unknown", which reads as a failure rather than as what it is.
+  // Such a marker is new information on this draw, so it says so.
+  const trendLine = isNew
+    ? new Paragraph({
         alignment: AlignmentType.CENTER,
-        shading: { fill: chip.fill, type: ShadingType.CLEAR, color: "auto" },
-        spacing: { after: 40 },
+        shading: { fill: CHIP_NEW, type: ShadingType.CLEAR, color: "auto" },
         children: [
           new TextRun({
-            text: chip.label,
+            text: "New Finding",
             bold: true,
             color: "FFFFFF",
-            size: 18,
+            size: 16,
             font: "Arial",
           }),
         ],
-      }),
-      new Paragraph({
+      })
+    : new Paragraph({
         alignment: AlignmentType.CENTER,
         children: [
           new TextRun({
@@ -690,7 +740,20 @@ function statusCell(
             font: "Arial",
           }),
         ],
+      });
+
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    margins: { top: 80, bottom: 80, left: 80, right: 80 },
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        shading: { fill: chip.fill, type: ShadingType.CLEAR, color: "auto" },
+        spacing: { after: 40 },
+        children: chipRuns(chip),
       }),
+      trendLine,
     ],
   });
 }
@@ -726,6 +789,48 @@ function buildHeaderTable(analysis: DeterministicAnalysis): Table {
       row("Ordering Practice:", h.orderingPractice, "Prepared For:", h.preparedFor),
     ],
   });
+}
+
+// Draw block: label/value across the full width.
+const DRAW_LABEL = 2200;
+const DRAW_VALUE = CONTENT_WIDTH - DRAW_LABEL; // 7160
+const DRAW_GRID = [DRAW_LABEL, DRAW_VALUE];
+
+/** "Previous Draw" / "Current Draw" dates. The previous row is omitted when no
+ *  prior date was supplied rather than printing an em dash that looks like a
+ *  missing value the tool should have had. */
+function buildDrawTable(
+  analysis: DeterministicAnalysis,
+  priorPanelDate: string | null,
+): Table {
+  const row = (label: string, value: string): TableRow =>
+    new TableRow({
+      cantSplit: true,
+      children: [
+        headerLabelCell(label, DRAW_LABEL),
+        headerValueCell(value, DRAW_VALUE),
+      ],
+    });
+
+  const prior = formatDrawDate(priorPanelDate);
+  const rows: TableRow[] = [];
+  if (prior) rows.push(row("Previous Draw:", prior));
+  rows.push(row("Current Draw:", analysis.header.collected || "—"));
+
+  return new Table({
+    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: DRAW_GRID,
+    rows,
+  });
+}
+
+/** "YYYY-MM-DD" (what the form collects) -> "MM/DD/YYYY" (what the rest of the
+ *  document prints). Anything else passes through unchanged. */
+function formatDrawDate(raw: string | null): string {
+  const s = (raw ?? "").trim();
+  if (!s) return "";
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return iso ? `${iso[2]}/${iso[3]}/${iso[1]}` : s;
 }
 
 function headerLabelCell(text: string, width: number): TableCell {
@@ -837,8 +942,22 @@ function compactBands(optimal: string): string | null {
 }
 
 export interface StatusChip {
+  /** First line: where the value sits. Never wraps at the sized column width. */
   label: string;
+  /** Second line: "(High)" / "(Low)", or "" when the status carries no
+   *  direction. Rendered as its own line so the chip never wraps mid-word. */
+  direction: string;
   fill: string;
+}
+
+/** Direction is read off the deterministic status wording, never re-derived
+ *  from the value. Returns "" when that wording carries none. */
+function directionFrom(key: string): string {
+  if (/\bHIGH\b/.test(key) || key === "ABOVE OPTIMAL") return "(High)";
+  if (/\bLOW\b/.test(key) || key === "SUBOPTIMAL" || key === "BELOW OPTIMAL") {
+    return "(Low)";
+  }
+  return "";
 }
 
 /**
@@ -852,45 +971,53 @@ export interface StatusChip {
  */
 export function statusChip(status: string, withinLabRange: boolean | null): StatusChip {
   const raw = (status ?? "").trim();
-  const starred = raw.endsWith("*");
   const key = raw.replace(/\*+$/, "").trim().toUpperCase();
 
-  // Re-eval vocabulary.
-  if (key === "IN RANGE") return { label: "In Range", fill: CHIP_IN_RANGE };
-  if (key === "NOT RETESTED") return { label: "Not retested", fill: CHIP_NEUTRAL };
-  if (key === "OUT OF LAB RANGE") return { label: "Out of Range", fill: CHIP_LAB };
-  if (key === "OUT OF OPTIMAL") return { label: "Out of Optimal*", fill: CHIP_OPTIMAL };
+  // Re-eval vocabulary. ComparisonRow carries no flagDirection, so these four
+  // print without a direction line; see NOTE in buildComparisonTable.
+  if (key === "IN RANGE") {
+    return { label: "In Range", direction: "", fill: CHIP_IN_RANGE };
+  }
+  if (key === "NOT RETESTED") {
+    return { label: "Not retested", direction: "", fill: CHIP_NEUTRAL };
+  }
+  if (key === "NEW FINDING") {
+    return { label: "New Finding", direction: "", fill: CHIP_NEW };
+  }
+  if (key === "OUT OF LAB RANGE") {
+    return { label: "Out of Lab Range", direction: "", fill: CHIP_LAB };
+  }
+  if (key === "OUT OF OPTIMAL") {
+    return { label: "Out of Optimal", direction: "", fill: CHIP_OPTIMAL };
+  }
 
-  // Inside the lab range => amber, and the asterisk stays on the label.
-  const fill = withinLabRange === true ? CHIP_OPTIMAL : CHIP_LAB;
-  const star = starred ? "*" : "";
+  // Initial-mode vocabulary. Inside the lab range => amber; the direction the
+  // engine flagged becomes the chip's second line.
+  const outsideLab = withinLabRange !== true;
+  const fill = outsideLab ? CHIP_LAB : CHIP_OPTIMAL;
+  const label = outsideLab ? "Out of Lab Range" : "Out of Optimal";
+  const direction = directionFrom(key);
 
   switch (key) {
     case "HIGH":
-      return { label: `High${star}`, fill };
     case "LOW":
-      return { label: `Low${star}`, fill };
     case "ABOVE OPTIMAL":
-      return { label: `Above Optimal${star}`, fill };
     case "SUBOPTIMAL":
     case "BELOW OPTIMAL":
-      return { label: `Below Optimal${star}`, fill };
     case "BORDERLINE HIGH":
     case "BORDERLINE LOW":
     case "BORDERLINE":
-      return { label: `Borderline${star}`, fill };
     case "MODERATE":
-      return { label: `Moderate${star}`, fill };
     case "OUT OF RANGE":
-      return { label: `Out of Range${star}`, fill };
+      return { label, direction, fill };
     case "OPTIMAL":
-      return { label: "Optimal", fill: CHIP_IN_RANGE };
+      return { label: "In Range", direction: "", fill: CHIP_IN_RANGE };
     default: {
       // Unknown vocabulary still prints, in Title Case, rather than vanishing.
-      const label = raw
+      const fallback = raw
         ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
         : "—";
-      return { label, fill };
+      return { label: fallback, direction: "", fill };
     }
   }
 }
@@ -906,18 +1033,37 @@ function chipCell(chip: StatusChip, width: number): TableCell {
   });
 }
 
+function chipRuns(chip: StatusChip): TextRun[] {
+  const runs = [
+    new TextRun({
+      text: chip.label,
+      bold: true,
+      color: "FFFFFF",
+      size: 18,
+      font: "Arial",
+    }),
+  ];
+  // An explicit break, not a wrap: the direction always starts its own line and
+  // the label above it never splits mid-word.
+  if (chip.direction) {
+    runs.push(
+      new TextRun({
+        text: chip.direction,
+        bold: true,
+        color: "FFFFFF",
+        size: 16,
+        font: "Arial",
+        break: 1,
+      }),
+    );
+  }
+  return runs;
+}
+
 function chipParagraph(chip: StatusChip): Paragraph {
   return new Paragraph({
     alignment: AlignmentType.CENTER,
-    children: [
-      new TextRun({
-        text: chip.label,
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-      }),
-    ],
+    children: chipRuns(chip),
   });
 }
 
@@ -929,7 +1075,7 @@ function buildChartLegend(): Paragraph {
     children: [
       runBold("Status key:  "),
       new TextRun({
-        text: "  Outside standard lab range  ",
+        text: "  Out of Lab Range  ",
         bold: true,
         color: "FFFFFF",
         size: 18,
@@ -938,7 +1084,7 @@ function buildChartLegend(): Paragraph {
       }),
       runPlain("   "),
       new TextRun({
-        text: "  Outside functional optimal range only  ",
+        text: "  Out of Optimal  ",
         bold: true,
         color: "FFFFFF",
         size: 18,
@@ -946,7 +1092,7 @@ function buildChartLegend(): Paragraph {
         shading: { fill: CHIP_OPTIMAL, type: ShadingType.CLEAR, color: "auto" },
       }),
       runItalic(
-        "     * marks a value inside the standard lab range but outside the functional target.",
+        "     Red = outside the standard lab range. Amber = inside the lab range but outside the functional optimal range. (High) / (Low) gives the direction.",
         GREY,
         18,
       ),
@@ -977,7 +1123,7 @@ function buildChartTable(rows: ChartRow[]): Table {
         cantSplit: true,
         children: [
           chartCell(shortMarkerName(r.marker), COL_MARKER, { bold: true }),
-          chartCell(r.result, COL_RESULT),
+          chartCell(r.result, COL_RESULT, { bold: true }),
           chartCell(r.labRange, COL_LAB),
           chartCell(displayOptimalRange(r.labRange, r.optimalRange), COL_OPTIMAL),
           chipCell(statusChip(r.status, r.withinLabRange), COL_STATUS),
@@ -1145,6 +1291,75 @@ function renderBlocks(blocks: NarrativeBlock[]): Paragraph[] {
           spacing: { after: 60 },
           indent: { left: 460, hanging: 220 },
           children,
+        });
+      }
+      case "subhead":
+        return new Paragraph({
+          spacing: { before: 180, after: 60 },
+          keepNext: true,
+          children: [
+            new TextRun({
+              text: b.text,
+              bold: true,
+              color: NAVY,
+              size: 20,
+              font: "Arial",
+            }),
+          ],
+        });
+      case "relevance":
+        // "Relevance to <chief concern>: ..." — the label half is bolded so the
+        // practitioner can scan straight to it under each pattern.
+        {
+          const split = b.text.indexOf(":");
+          const label = split > 0 ? b.text.slice(0, split + 1) : b.text;
+          const rest = split > 0 ? b.text.slice(split + 1) : "";
+          return new Paragraph({
+            spacing: { before: 60, after: 160 },
+            indent: { left: 460 },
+            children: [
+              new TextRun({
+                text: label,
+                bold: true,
+                italics: true,
+                color: NAVY,
+                size: 19,
+                font: "Arial",
+              }),
+              new TextRun({
+                text: rest,
+                italics: true,
+                color: "000000",
+                size: 19,
+                font: "Arial",
+              }),
+            ],
+          });
+        }
+      case "leadBullet": {
+        // Bold everything up to the first colon: the marker name leads, the
+        // reasoning follows.
+        const split = b.text.indexOf(":");
+        const lead = split > 0 ? b.text.slice(0, split + 1) : "";
+        const rest = split > 0 ? b.text.slice(split + 1) : b.text;
+        return new Paragraph({
+          spacing: { after: 60 },
+          indent: { left: 460, hanging: 220 },
+          children: [
+            runPlain("\u2022  ", "000000", 20),
+            ...(lead
+              ? [
+                  new TextRun({
+                    text: lead,
+                    bold: true,
+                    color: NAVY,
+                    size: 20,
+                    font: "Arial",
+                  }),
+                ]
+              : []),
+            runPlain(rest, "000000", 20),
+          ],
         });
       }
       case "symptomTags":

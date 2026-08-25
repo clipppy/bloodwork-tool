@@ -93,51 +93,84 @@ function main() {
     "no target tier: full string kept rather than inventing one",
   );
 
-  // ----- statusChip: label never wraps, colour follows the lab range -----
+  // ----- statusChip: two short lines, colour follows the lab range -----
   const RED = "C00000";
   const AMBER = "B26A00";
   const GREEN = "2E7D32";
+  const NEW = "4A5B6E";
 
+  // Outside the lab range -> red, "Out of Lab Range" + direction.
   const high = statusChip("HIGH", false);
-  eq(high.label, "High", "HIGH label"); eq(high.fill, RED, "HIGH is red");
+  eq(high.label, "Out of Lab Range", "HIGH label");
+  eq(high.direction, "(High)", "HIGH direction");
+  eq(high.fill, RED, "HIGH is red");
   const low = statusChip("LOW", false);
-  eq(low.label, "Low", "LOW label"); eq(low.fill, RED, "LOW is red");
+  eq(low.label, "Out of Lab Range", "LOW label");
+  eq(low.direction, "(Low)", "LOW direction");
+  eq(low.fill, RED, "LOW is red");
+
+  // Inside the lab range -> amber, "Out of Optimal" + direction.
   const above = statusChip("ABOVE OPTIMAL*", true);
-  eq(above.label, "Above Optimal*", "ABOVE OPTIMAL label keeps asterisk");
+  eq(above.label, "Out of Optimal", "ABOVE OPTIMAL label");
+  eq(above.direction, "(High)", "ABOVE OPTIMAL direction");
   eq(above.fill, AMBER, "above-optimal is amber");
   const sub = statusChip("SUBOPTIMAL*", true);
-  eq(sub.label, "Below Optimal*", "SUBOPTIMAL renamed to Below Optimal*");
+  eq(sub.label, "Out of Optimal", "SUBOPTIMAL label");
+  eq(sub.direction, "(Low)", "SUBOPTIMAL direction is Low");
   eq(sub.fill, AMBER, "below-optimal is amber");
-  eq(statusChip("BORDERLINE HIGH*", true).label, "Borderline*", "borderline high collapses");
-  eq(statusChip("BORDERLINE LOW*", true).label, "Borderline*", "borderline low collapses");
-  eq(statusChip("OUT OF RANGE", false).label, "Out of Range", "out of range label");
+  eq(statusChip("BORDERLINE HIGH*", true).direction, "(High)", "borderline high keeps direction");
+  eq(statusChip("BORDERLINE LOW*", true).direction, "(Low)", "borderline low keeps direction");
+  eq(statusChip("BORDERLINE LOW*", true).label, "Out of Optimal", "borderline low label");
+
+  // Statuses that genuinely carry no direction must not invent one.
+  eq(statusChip("MODERATE", false).direction, "", "MODERATE has no direction");
   eq(statusChip("MODERATE", false).fill, RED, "moderate outside lab range is red");
   eq(statusChip("MODERATE*", true).fill, AMBER, "asterisked moderate is amber");
+  eq(statusChip("OUT OF RANGE", false).direction, "", "OUT OF RANGE has no direction");
+  eq(statusChip("OUT OF RANGE", false).label, "Out of Lab Range", "OUT OF RANGE label");
+
+  // A value with no usable lab range is treated as outside it, as before.
+  eq(statusChip("HIGH", null).fill, RED, "null withinLabRange is red");
+
   // Re-eval vocabulary.
   eq(statusChip("In Range", true).label, "In Range", "re-eval In Range label");
   eq(statusChip("In Range", true).fill, GREEN, "re-eval In Range is green");
-  eq(statusChip("Out of Lab Range", false).label, "Out of Range", "re-eval lab-range label");
+  eq(statusChip("Out of Lab Range", false).label, "Out of Lab Range", "re-eval lab-range label");
   eq(statusChip("Out of Lab Range", false).fill, RED, "re-eval lab-range is red");
-  eq(statusChip("Out of Optimal", true).label, "Out of Optimal*", "re-eval optimal label");
+  eq(statusChip("Out of Optimal", true).label, "Out of Optimal", "re-eval optimal label");
   eq(statusChip("Out of Optimal", true).fill, AMBER, "re-eval optimal is amber");
   eq(statusChip("Not retested", null).label, "Not retested", "not-retested label");
+  eq(statusChip("New Finding", null).label, "New Finding", "new-finding label");
+  eq(statusChip("New Finding", null).fill, NEW, "new-finding is the neutral blue-gray");
 
-  // Every label must fit the status column on one line. The columns are sized
-  // for 15 characters at 9pt Arial bold; anything longer would wrap.
-  const LABEL_MAX = 15;
+  // Every chip line must fit the status column. The columns are sized for 16
+  // characters at 9pt Arial bold; the direction is a separate line, never a wrap.
+  const LABEL_MAX = 16;
   const vocabulary = [
     "HIGH", "LOW", "MODERATE", "MODERATE*", "OUT OF RANGE", "OUT OF RANGE*",
     "ABOVE OPTIMAL*", "SUBOPTIMAL*", "BORDERLINE HIGH*", "BORDERLINE LOW*",
     "OPTIMAL", "In Range", "Out of Lab Range", "Out of Optimal", "Not retested",
+    "New Finding",
   ];
   for (const v of vocabulary) {
     for (const within of [true, false, null] as const) {
-      const { label } = statusChip(v, within);
+      const chip = statusChip(v, within);
       ok(
-        label.length <= LABEL_MAX,
-        `chip label "${label}" (from "${v}") is ${label.length} chars, over the ${LABEL_MAX}-char budget`,
+        chip.label.length <= LABEL_MAX,
+        `chip label "${chip.label}" (from "${v}") is ${chip.label.length} chars, over the ${LABEL_MAX}-char budget`,
       );
-      ok(!label.includes("\n"), `chip label "${label}" is single-line`);
+      ok(!chip.label.includes("\n"), `chip label "${chip.label}" is single-line`);
+      ok(
+        chip.direction === "" || chip.direction === "(High)" || chip.direction === "(Low)",
+        `chip direction "${chip.direction}" (from "${v}") is one of "", "(High)", "(Low)"`,
+      );
+      // A direction only ever accompanies an out-of-range verdict.
+      ok(
+        chip.direction === "" ||
+          chip.label === "Out of Lab Range" ||
+          chip.label === "Out of Optimal",
+        `direction "${chip.direction}" attached to unexpected label "${chip.label}"`,
+      );
     }
   }
 

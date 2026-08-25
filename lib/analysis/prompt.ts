@@ -28,7 +28,13 @@ export type NarrativeBlockType =
   /** Patient-reported symptoms a root-cause pattern explains. Reasoning only —
    *  carries no lab value, and the document renders it as a tag strip under the
    *  pattern's bullets. */
-  | "symptomTags";
+  | "symptomTags"
+  /** "Relevance to <chief concern>: ..." — italic, under a pattern's bullets. */
+  | "relevance"
+  /** Sub-heading inside a section (the three summary subsections). */
+  | "subhead"
+  /** Bullet whose lead-in, up to the first colon, is bolded. */
+  | "leadBullet";
 
 export interface NarrativeBlock {
   type: NarrativeBlockType;
@@ -36,6 +42,8 @@ export interface NarrativeBlock {
 }
 
 export interface AnalysisNarrative {
+  /** Short noun phrase in the patient's own terms; drives the section labels. */
+  chiefConcern: string;
   clinicalPresentation: NarrativeBlock[];
   reassuring: NarrativeBlock[];
   rootCause: NarrativeBlock[];
@@ -88,6 +96,17 @@ function fieldSpec(hasIntake: boolean): string {
   return [
     "Return the analysis as a JSON object with exactly these fields:",
     "",
+    "- chiefConcern: the patient's chief concern as a SHORT noun phrase in their",
+    "    own terms, e.g. 'persistent fatigue' or 'joint pain and stiffness'. It is",
+    "    used verbatim inside sentence-case labels ('What's likely behind <chief",
+    hasIntake
+      ? "    concern>'), so keep it lowercase and do not end it with a period. Take it"
+      : "    concern>'), so keep it lowercase and do not end it with a period. No intake",
+    hasIntake
+      ? "    from the intake; if the intake names no single concern, use the dominant"
+      : "    was provided, so return exactly: the findings on this panel",
+    hasIntake ? "    reported symptom." : "",
+    "",
     "- clinicalPresentation: array of strings.",
     hasIntake
       ? "    One entry per clinical fact from the intake notes: prior diagnoses, symptoms"
@@ -121,16 +140,24 @@ function fieldSpec(hasIntake: boolean): string {
     hasIntake
       ? "      Return an empty array for a pattern that no reported symptom maps to."
       : "      No intake was provided, so return an empty array for every pattern.",
+    "    * `relevanceToChiefConcern`: one or two sentences on how this pattern bears",
+    "      on the chief concern you named above — whether it helps explain it, argues",
+    "      against a contributor, or is incidental to it. Say so plainly when the link",
+    "      is weak; do not stretch a finding to fit the complaint. Reasoning only: no",
+    "      values and no numbers.",
     "",
     "- phasedProtocol: array of { phase, goal, bullets }. Three or four phases,",
     "    ending with a sustain-and-monitor phase that names the retest interval.",
     "    `phase` reads like 'Phase 1 - Foundation & Stabilization (Weeks 1-4)'.",
     "    `goal` is one sentence. `bullets` are the interventions and lab orders.",
     "",
-    "- patientSummary: array of strings, one per paragraph, addressed to the patient",
-    "    as 'you', at roughly an eighth-grade reading level. Lead with what looks",
-    "    good, then what needs attention and why it connects to how they feel, then",
-    "    what the plan will do about it. No name.",
+    "- patientSummary: an object with exactly three string fields, each one short",
+    "    paragraph addressed to the patient as 'you', at roughly an eighth-grade",
+    "    reading level, with no name:",
+    "      whatsGoingWell:      what the panel shows is working.",
+    "      likelyDrivers:       what is most likely behind the chief concern, and why",
+    "                           it connects to how they feel.",
+    "      planInPlainLanguage: what the plan will do about it, at category depth.",
     "",
     "Write plain prose inside the fields — no markdown, no bullet characters, no",
     "numbering. The document adds all formatting.",
@@ -185,9 +212,13 @@ export interface ReevalNarrative {
   /** Prior values keyed by canonical marker name. The only LLM-sourced numbers
    *  that reach the document, and only into the Prior column. */
   priorFacts: Map<string, PriorMarkerFact>;
+  chiefConcern: string;
   overview: NarrativeBlock[];
   rootCause: NarrativeBlock[];
   protocol: NarrativeBlock[];
+  /** Both may be empty; the document omits the heading when they are. */
+  alreadyImproving: NarrativeBlock[];
+  backgroundFindings: NarrativeBlock[];
   patientSummary: NarrativeBlock[];
 }
 
@@ -250,6 +281,12 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     "",
     "Return the follow-up analysis as a JSON object with exactly these fields:",
     "",
+    "- chiefConcern: the patient's chief concern as a SHORT lowercase noun phrase in",
+    "    their own terms, e.g. 'persistent fatigue'. It is used verbatim inside",
+    "    sentence-case labels, so do not end it with a period. Take it from the intake;",
+    "    failing that, from the presenting complaint the prior report records; failing",
+    "    both, use the dominant reported symptom.",
+    "",
     "- priorMarkers: array of { name, priorValue, comparable }, one entry per marker",
     "    the PRIOR report flagged as outside its lab range or outside the",
     "    functional/optimal range.",
@@ -282,6 +319,9 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     "      no lab values, no numbers, no units, no dates, and no names or other",
     "      identifiers. Return an empty array for a pattern that no reported symptom",
     "      maps to.",
+    "    * `relevanceToChiefConcern`: one or two sentences on how this pattern bears",
+    "      on the chief concern you named above. Say so plainly when the link is weak.",
+    "      Reasoning only: no values and no numbers.",
     "",
     "- updatedProtocol: array of { phase, goal, bullets } that builds on the prior",
     "    report's protocol rather than replacing it. Every bullet MUST begin with one",
@@ -298,9 +338,27 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     "    named a specific product, you may reference it as the prior plan's choice and",
     "    say whether to continue, taper, or reassess it.",
     "",
-    "- patientSummary: array of strings, one per paragraph, addressed to the patient",
-    "    as 'you'. Lead with what improved, then what needs attention now and why,",
-    "    then what the updated plan does about it. No name.",
+    "- alreadyImproving: array of strings — what is already moving in the right",
+    "    direction and should be REINFORCED rather than changed. One entry per",
+    "    improvement, written for the practitioner. Ground every entry in the",
+    "    improved / held / worsened verdict the tool computed and handed you above:",
+    "    that verdict is the tool's, not yours to derive, and you must not claim a",
+    "    movement the data does not show. Return an empty array if nothing improved.",
+    "",
+    "- backgroundFindings: array of strings — markers the PRIOR report flagged that",
+    "    this draw did NOT re-test, so the practitioner can see what is still open.",
+    "    Start each entry with the marker name followed by a colon, then why it still",
+    "    matters and whether it is worth re-testing. Include a marker only when the",
+    "    prior report flagged it AND it is absent from the current panel data above.",
+    "    Return an empty array when this draw re-tested everything the prior report",
+    "    flagged. Do not restate a marker that appears in the current panel.",
+    "",
+    "- patientSummary: an object with exactly three string fields, each one short",
+    "    paragraph addressed to the patient as 'you', with no name:",
+    "      whatsGoingWell:      what improved or is holding well.",
+    "      likelyDrivers:       what is most likely behind the chief concern now, and",
+    "                           why it connects to how they feel.",
+    "      planInPlainLanguage: what the updated plan does about it.",
     "",
     "Write plain prose inside the fields — no markdown, no bullet characters, no",
     "numbering. The document adds all formatting.",
@@ -340,6 +398,7 @@ function requireText(value: unknown, field: string): string {
 function patternsToBlocks(
   value: unknown,
   field: string,
+  chiefConcern: string,
 ): NarrativeBlock[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new NarrativeParseError(`The model returned no "${field}" content.`);
@@ -365,8 +424,51 @@ function patternsToBlocks(
     if (tags.length > 0) {
       blocks.push({ type: "symptomTags", text: tags.join(SYMPTOM_TAG_SEPARATOR) });
     }
+    const relevance =
+      typeof (entry as { relevanceToChiefConcern?: unknown })?.relevanceToChiefConcern ===
+      "string"
+        ? ((entry as { relevanceToChiefConcern: string }).relevanceToChiefConcern).trim()
+        : "";
+    if (relevance) {
+      blocks.push({
+        type: "relevance",
+        text: `Relevance to ${chiefConcern}: ${relevance}`,
+      });
+    }
   }
   return blocks;
+}
+
+/** The three-subsection plain-language close. */
+function summaryToBlocks(value: unknown, chiefConcern: string): NarrativeBlock[] {
+  const v = (value ?? {}) as Record<string, unknown>;
+  const sections: Array<[string, string]> = [
+    ["What's going well", requireText(v.whatsGoingWell, "patientSummary.whatsGoingWell")],
+    [
+      `What's likely behind ${chiefConcern}`,
+      requireText(v.likelyDrivers, "patientSummary.likelyDrivers"),
+    ],
+    [
+      "What we're going to do about it",
+      requireText(v.planInPlainLanguage, "patientSummary.planInPlainLanguage"),
+    ],
+  ];
+  const blocks: NarrativeBlock[] = [];
+  for (const [head, body] of sections) {
+    blocks.push({ type: "subhead", text: head });
+    blocks.push({ type: "paragraph", text: body });
+  }
+  return blocks;
+}
+
+/** Bullets whose lead-in (up to the first colon) is bolded on the page. */
+const leadBullets = (items: string[]): NarrativeBlock[] =>
+  items.map((text) => ({ type: "leadBullet" as const, text }));
+
+/** Chief concern, defaulted so the section labels always read sensibly. */
+function readChiefConcern(value: unknown): string {
+  const s = typeof value === "string" ? value.trim() : "";
+  return s || "the findings on this panel";
 }
 
 function phasesToBlocks(value: unknown, field: string): NarrativeBlock[] {
@@ -406,14 +508,16 @@ export function toAnalysisNarrative(json: InitialNarrativeJson): AnalysisNarrati
   if (!json || typeof json !== "object") {
     throw new NarrativeParseError("The model returned no analysis content.");
   }
+  const chiefConcern = readChiefConcern(json.chiefConcern);
   return {
+    chiefConcern,
     clinicalPresentation: bullets(
       requireNonEmptyStrings(json.clinicalPresentation, "clinicalPresentation"),
     ),
     reassuring: paragraphs([requireText(json.reassuringNarrative, "reassuringNarrative")]),
-    rootCause: patternsToBlocks(json.rootCauseAnalysis, "rootCauseAnalysis"),
+    rootCause: patternsToBlocks(json.rootCauseAnalysis, "rootCauseAnalysis", chiefConcern),
     protocol: phasesToBlocks(json.phasedProtocol, "phasedProtocol"),
-    patientSummary: paragraphs(requireNonEmptyStrings(json.patientSummary, "patientSummary")),
+    patientSummary: summaryToBlocks(json.patientSummary, chiefConcern),
   };
 }
 
@@ -436,11 +540,30 @@ export function toReevalNarrative(json: ReevalNarrativeJson): ReevalNarrative {
     }
   }
 
+  const chiefConcern = readChiefConcern(json.chiefConcern);
   return {
     priorFacts,
+    chiefConcern,
     overview: paragraphs(requireNonEmptyStrings(json.overview, "overview")),
-    rootCause: patternsToBlocks(json.comparativeRootCause, "comparativeRootCause"),
+    rootCause: patternsToBlocks(
+      json.comparativeRootCause,
+      "comparativeRootCause",
+      chiefConcern,
+    ),
     protocol: phasesToBlocks(json.updatedProtocol, "updatedProtocol"),
-    patientSummary: paragraphs(requireNonEmptyStrings(json.patientSummary, "patientSummary")),
+    // Both sections are legitimately empty — nothing improved yet, or the draw
+    // re-tested everything — so they pass allowEmpty and the document drops the
+    // heading rather than printing an empty one.
+    alreadyImproving: bullets(
+      requireNonEmptyStrings(json.alreadyImproving ?? [], "alreadyImproving", {
+        allowEmpty: true,
+      }),
+    ),
+    backgroundFindings: leadBullets(
+      requireNonEmptyStrings(json.backgroundFindings ?? [], "backgroundFindings", {
+        allowEmpty: true,
+      }),
+    ),
+    patientSummary: summaryToBlocks(json.patientSummary, chiefConcern),
   };
 }
