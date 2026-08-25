@@ -58,17 +58,37 @@ const LIGHT_GREY = "CCCCCC";
 const TREND_GREEN = "2E7D32";
 const TREND_RED = "C00000";
 
+// Status-chip fills. Chip text is always bold white, so each fill is dark
+// enough to clear 4.5:1 contrast against white.
+const CHIP_LAB = "C00000"; // outside the standard lab range
+const CHIP_OPTIMAL = "B26A00"; // inside the lab range, outside the functional target
+const CHIP_IN_RANGE = "2E7D32"; // re-eval only: back inside both ranges
+const CHIP_NEUTRAL = "6E6E6E"; // re-eval only: not retested / nothing to compare
+
 const PAGE_WIDTH = 12240;
 const PAGE_HEIGHT = 15840;
 const PAGE_MARGIN = 1440;
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2; // 9360
 
 // Chart column widths, summing to CONTENT_WIDTH.
-const COL_MARKER = 2100;
-const COL_RESULT = 1700;
-const COL_LAB = 1800;
-const COL_OPTIMAL = 2260;
-const COL_STATUS = 1500;
+//
+// These same numbers go into the table's `columnWidths` as well as each cell's
+// `width`. Without columnWidths the docx writer emits a tblGrid of 100-twip
+// columns; Word happens to re-fit from the cell widths, but every other
+// renderer (Pages, LibreOffice, Google Docs, most PDF converters) honours the
+// grid and squeezes the table into an unreadable mess. The grid is the fix.
+const COL_MARKER = 2000;
+const COL_RESULT = 2060;
+const COL_LAB = 1700;
+const COL_OPTIMAL = 1800;
+// Wide enough for the longest chip label ("Above Optimal*") on one line.
+const COL_STATUS = 1800;
+const CHART_GRID = [COL_MARKER, COL_RESULT, COL_LAB, COL_OPTIMAL, COL_STATUS];
+
+// Header block: label/value twice across.
+const HDR_LABEL = 1900;
+const HDR_VALUE = 2780;
+const HEADER_GRID = [HDR_LABEL, HDR_VALUE, HDR_LABEL, HDR_VALUE];
 
 const FOOTER_NOTE =
   "Prepared as clinical decision support based on the laboratory results named above. " +
@@ -194,6 +214,7 @@ function buildDocument(
       }),
     );
   } else {
+    children.push(buildChartLegend());
     // One table per body system, in taxonomy order. Row content is untouched —
     // only the headings and the split points are new.
     for (const group of groupBySystem(analysis.rows, (r) => r.marker)) {
@@ -497,6 +518,7 @@ function buildReevalDocument(
 function buildLegend(): Paragraph {
   return new Paragraph({
     spacing: { after: 160 },
+    keepNext: true,
     children: [
       runBold("Legend:  "),
       new TextRun({
@@ -505,7 +527,7 @@ function buildLegend(): Paragraph {
         color: "FFFFFF",
         size: 18,
         font: "Arial",
-        shading: { fill: NAVY, type: ShadingType.CLEAR, color: "auto" },
+        shading: { fill: CHIP_LAB, type: ShadingType.CLEAR, color: "auto" },
       }),
       runPlain("   "),
       new TextRun({
@@ -514,7 +536,7 @@ function buildLegend(): Paragraph {
         color: "FFFFFF",
         size: 18,
         font: "Arial",
-        shading: { fill: TEAL, type: ShadingType.CLEAR, color: "auto" },
+        shading: { fill: CHIP_OPTIMAL, type: ShadingType.CLEAR, color: "auto" },
       }),
       runPlain("   "),
       new TextRun({
@@ -529,22 +551,28 @@ function buildLegend(): Paragraph {
   });
 }
 
+/** Body-system heading. keepNext binds it to the table that follows so a
+ *  heading can never strand alone at the foot of a page. */
 function groupHeading(label: string): Paragraph {
   return new Paragraph({
     spacing: { before: 240, after: 100 },
+    keepNext: true,
     children: [
       new TextRun({ text: label, bold: true, color: NAVY, size: 22, font: "Arial" }),
     ],
   });
 }
 
-// Comparison columns sum to CONTENT_WIDTH (9360).
-const RC_MARKER = 2000;
-const RC_PRIOR = 1400;
-const RC_CURRENT = 1600;
-const RC_LAB = 1400;
-const RC_OPTIMAL = 1600;
-const RC_STATUS = 1360;
+// Comparison columns sum to CONTENT_WIDTH (9360). Same rule as CHART_GRID:
+// whatever is here must also be emitted as the table's columnWidths.
+const RC_MARKER = 1800;
+const RC_PRIOR = 1420;
+const RC_CURRENT = 1420;
+const RC_LAB = 1410;
+const RC_OPTIMAL = 1410;
+// Fits the longest re-eval chip ("Out of Optimal*") on one line.
+const RC_STATUS = 1900;
+const RC_GRID = [RC_MARKER, RC_PRIOR, RC_CURRENT, RC_LAB, RC_OPTIMAL, RC_STATUS];
 
 function buildComparisonTable(rows: ComparisonRow[]): Table {
   const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
@@ -563,12 +591,13 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
   const body = rows.map(
     (r) =>
       new TableRow({
+        cantSplit: true,
         children: [
-          chartCell(r.marker, RC_MARKER, { bold: true }),
+          chartCell(shortMarkerName(r.marker), RC_MARKER, { bold: true }),
           priorCell(r.prior, RC_PRIOR),
           chartCell(r.current, RC_CURRENT),
           chartCell(r.labRange, RC_LAB),
-          chartCell(r.optimalRange, RC_OPTIMAL),
+          chartCell(displayOptimalRange(r.labRange, r.optimalRange), RC_OPTIMAL),
           statusCell(r.status, r.trend, RC_STATUS, r.withinLabRange),
         ],
       }),
@@ -576,6 +605,7 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
 
   return new Table({
     width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: RC_GRID,
     rows: [head, ...body],
   });
 }
@@ -624,23 +654,32 @@ function statusCell(
   width: number,
   withinLabRange: boolean | null,
 ): TableCell {
+  // The re-eval status cell carries two independent signals: where the value
+  // sits (the chip) and which way it moved (the trend). Shading the PARAGRAPH
+  // rather than the cell keeps the chip's colour without swallowing the
+  // trend's own green/red, which is the column's most-read line.
+  const chip = statusChip(status, withinLabRange);
   return new TableCell({
     borders: bordersAll(),
     width: { size: width, type: WidthType.DXA },
-    margins: { top: 80, bottom: 80, left: 120, right: 120 },
+    margins: { top: 80, bottom: 80, left: 80, right: 80 },
     children: [
       new Paragraph({
+        alignment: AlignmentType.CENTER,
+        shading: { fill: chip.fill, type: ShadingType.CLEAR, color: "auto" },
+        spacing: { after: 40 },
         children: [
           new TextRun({
-            text: status,
+            text: chip.label,
             bold: true,
-            color: withinLabRange === true ? TEAL : NAVY,
-            size: 20,
+            color: "FFFFFF",
+            size: 18,
             font: "Arial",
           }),
         ],
       }),
       new Paragraph({
+        alignment: AlignmentType.CENTER,
         children: [
           new TextRun({
             text: trend,
@@ -660,8 +699,8 @@ function statusCell(
 
 function buildHeaderTable(analysis: DeterministicAnalysis): Table {
   const h = analysis.header;
-  const labelWidth = 1900;
-  const valueWidth = CONTENT_WIDTH / 2 - labelWidth; // 2780
+  const labelWidth = HDR_LABEL;
+  const valueWidth = HDR_VALUE; // CONTENT_WIDTH / 2 - labelWidth
 
   const row = (
     l1: string,
@@ -680,6 +719,7 @@ function buildHeaderTable(analysis: DeterministicAnalysis): Table {
 
   return new Table({
     width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: HEADER_GRID,
     rows: [
       row("Patient:", h.patientName, "DOB / Age:", h.dobAge),
       row("Specimen Collected:", h.collected, "Reported:", h.reported),
@@ -707,6 +747,213 @@ function headerValueCell(text: string, width: number): TableCell {
   });
 }
 
+// ----- Marker / range / status presentation -----
+
+/**
+ * Short common name for the table's Marker column.
+ *
+ * The dictionary's canonicalName carries the doctor's full wording, including
+ * the parenthetical expansion — "MCV (Mean Corpuscular Volume)". That is right
+ * for prose and far too wide for a five-column table, so the table prints the
+ * short form and drops a TRAILING expansion only.
+ *
+ * Guarded so the paren is not part of the name itself: "Lipoprotein (a)" keeps
+ * its "(a)" (a one-character body is a qualifier, not an expansion), and
+ * "Vitamin D 1,25 (OH)2 Total" is untouched because its paren is not trailing.
+ */
+export function shortMarkerName(canonicalName: string): string {
+  const m = canonicalName.trim().match(/^(.*\S)\s*\(([^()]*)\)$/);
+  if (!m) return canonicalName.trim();
+  const [, prefix, inner] = m;
+  if (prefix.length < 2 || inner.trim().length < 2) return canonicalName.trim();
+  return prefix;
+}
+
+/**
+ * Functional/Optimal cell. A `lab_range_only` marker has no target of its own,
+ * so deterministic.ts echoes the lab range with a "(lab range)" suffix. Echoing
+ * the neighbouring column adds nothing and reads as a second, conflicting
+ * target, so the table prints an em dash instead.
+ */
+export function displayOptimalRange(labRange: string, optimalRange: string): string {
+  const optimal = (optimalRange ?? "").trim();
+  if (!optimal || optimal === "—") return "—";
+  if (/\(lab range\)$/i.test(optimal)) return "—";
+
+  const shown = compactBands(optimal) ?? optimal;
+  // Compared AFTER compaction: a three-tier marker whose optimal band is just
+  // the lab cutoff restated ("> 6729" vs "≥ 6729") only reads as a second,
+  // conflicting target.
+  if (sameThreshold(shown, labRange ?? "")) return "—";
+  return shown;
+}
+
+/** Range equality for display purposes: ignores spacing and treats the strict
+ *  and inclusive forms of a bound as the same threshold, which is all the
+ *  distinction amounts to when one side is a lab cutoff and the other is the
+ *  band edge derived from it. */
+function sameThreshold(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(/[≥⩾]/g, ">")
+      .replace(/[≤⩽]/g, "<")
+      .replace(/[–—−]/g, "-");
+  const na = norm(a);
+  const nb = norm(b);
+  return na !== "" && na === nb;
+}
+
+/**
+ * Three-tier markers arrive as every band spelled out —
+ * "Optimal: [-inf, 215)  |  Moderate: [215, 301)  |  High: [301, +inf)" — which
+ * runs to four wrapped lines and drags the whole row's height with it.
+ *
+ * A column headed "Functional / Optimal Range" only needs the target band, and
+ * which tier the value actually landed in is already the Status chip's job, so
+ * the target is rendered in the same compact notation every other row uses.
+ * Anything that does not parse falls back to the full string rather than
+ * inventing a range. Returns null when there is nothing to compact.
+ */
+function compactBands(optimal: string): string | null {
+  if (!optimal.includes(":") || !optimal.includes("[")) return null;
+  const segments = optimal.split("|").map((s) => s.trim());
+  // "Optimal" for the clinical tiers, "Negative" for the serology tiers.
+  const target = segments.find((s) => /^(Optimal|Negative)\s*:/i.test(s));
+  if (!target) return null;
+
+  const m = target.match(/:\s*\[\s*([^,\]]+)\s*,\s*([^)\]]+)\s*[)\]]/);
+  if (!m) return null;
+  const isNegInf = (v: string) => /^[-−]\s*∞$/.test(v.trim());
+  const isPosInf = (v: string) => /^\+?\s*∞$/.test(v.trim());
+  const lo = m[1].trim();
+  const hi = m[2].trim();
+
+  if (isNegInf(lo) && isPosInf(hi)) return null;
+  if (isNegInf(lo)) return `< ${hi}`;
+  if (isPosInf(hi)) return `≥ ${lo}`;
+  return `${lo}–${hi}`;
+}
+
+export interface StatusChip {
+  label: string;
+  fill: string;
+}
+
+/**
+ * Deterministic status string -> chip. The wording comes from
+ * deterministic.ts's formatStatus / comparisonStatus and is never re-derived
+ * here: this maps it to a short label that cannot wrap, plus the fill colour.
+ *
+ * Red  = outside the standard lab range.
+ * Amber = inside the lab range but outside the functional optimal range; these
+ *         keep the asterisk the legend and the footer disclaimer explain.
+ */
+export function statusChip(status: string, withinLabRange: boolean | null): StatusChip {
+  const raw = (status ?? "").trim();
+  const starred = raw.endsWith("*");
+  const key = raw.replace(/\*+$/, "").trim().toUpperCase();
+
+  // Re-eval vocabulary.
+  if (key === "IN RANGE") return { label: "In Range", fill: CHIP_IN_RANGE };
+  if (key === "NOT RETESTED") return { label: "Not retested", fill: CHIP_NEUTRAL };
+  if (key === "OUT OF LAB RANGE") return { label: "Out of Range", fill: CHIP_LAB };
+  if (key === "OUT OF OPTIMAL") return { label: "Out of Optimal*", fill: CHIP_OPTIMAL };
+
+  // Inside the lab range => amber, and the asterisk stays on the label.
+  const fill = withinLabRange === true ? CHIP_OPTIMAL : CHIP_LAB;
+  const star = starred ? "*" : "";
+
+  switch (key) {
+    case "HIGH":
+      return { label: `High${star}`, fill };
+    case "LOW":
+      return { label: `Low${star}`, fill };
+    case "ABOVE OPTIMAL":
+      return { label: `Above Optimal${star}`, fill };
+    case "SUBOPTIMAL":
+    case "BELOW OPTIMAL":
+      return { label: `Below Optimal${star}`, fill };
+    case "BORDERLINE HIGH":
+    case "BORDERLINE LOW":
+    case "BORDERLINE":
+      return { label: `Borderline${star}`, fill };
+    case "MODERATE":
+      return { label: `Moderate${star}`, fill };
+    case "OUT OF RANGE":
+      return { label: `Out of Range${star}`, fill };
+    case "OPTIMAL":
+      return { label: "Optimal", fill: CHIP_IN_RANGE };
+    default: {
+      // Unknown vocabulary still prints, in Title Case, rather than vanishing.
+      const label = raw
+        ? raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
+        : "—";
+      return { label, fill };
+    }
+  }
+}
+
+/** The chip itself: a filled cell with bold white centred text. */
+function chipCell(chip: StatusChip, width: number): TableCell {
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    shading: { fill: chip.fill, type: ShadingType.CLEAR, color: "auto" },
+    margins: { top: 80, bottom: 80, left: 80, right: 80 },
+    children: [chipParagraph(chip)],
+  });
+}
+
+function chipParagraph(chip: StatusChip): Paragraph {
+  return new Paragraph({
+    alignment: AlignmentType.CENTER,
+    children: [
+      new TextRun({
+        text: chip.label,
+        bold: true,
+        color: "FFFFFF",
+        size: 18,
+        font: "Arial",
+      }),
+    ],
+  });
+}
+
+/** Colour key for the status chips, printed under the section 2 heading. */
+function buildChartLegend(): Paragraph {
+  return new Paragraph({
+    spacing: { after: 160 },
+    keepNext: true,
+    children: [
+      runBold("Status key:  "),
+      new TextRun({
+        text: "  Outside standard lab range  ",
+        bold: true,
+        color: "FFFFFF",
+        size: 18,
+        font: "Arial",
+        shading: { fill: CHIP_LAB, type: ShadingType.CLEAR, color: "auto" },
+      }),
+      runPlain("   "),
+      new TextRun({
+        text: "  Outside functional optimal range only  ",
+        bold: true,
+        color: "FFFFFF",
+        size: 18,
+        font: "Arial",
+        shading: { fill: CHIP_OPTIMAL, type: ShadingType.CLEAR, color: "auto" },
+      }),
+      runItalic(
+        "     * marks a value inside the standard lab range but outside the functional target.",
+        GREY,
+        18,
+      ),
+    ],
+  });
+}
+
 // ----- Section 2 chart -----
 
 function buildChartTable(rows: ChartRow[]): Table {
@@ -725,22 +972,22 @@ function buildChartTable(rows: ChartRow[]): Table {
   const body = rows.map(
     (r) =>
       new TableRow({
+        // A row that splits across a page break leaves a headless remnant at
+        // the top of the next page; keeping it whole is far more readable.
+        cantSplit: true,
         children: [
-          chartCell(r.marker, COL_MARKER, { bold: true }),
+          chartCell(shortMarkerName(r.marker), COL_MARKER, { bold: true }),
           chartCell(r.result, COL_RESULT),
           chartCell(r.labRange, COL_LAB),
-          chartCell(r.optimalRange, COL_OPTIMAL),
-          chartCell(r.status, COL_STATUS, {
-            bold: true,
-            // Asterisked rows are inside the lab range: teal, not alarm red.
-            color: r.withinLabRange === true ? TEAL : NAVY,
-          }),
+          chartCell(displayOptimalRange(r.labRange, r.optimalRange), COL_OPTIMAL),
+          chipCell(statusChip(r.status, r.withinLabRange), COL_STATUS),
         ],
       }),
   );
 
   return new Table({
     width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: CHART_GRID,
     rows: [head, ...body],
   });
 }
