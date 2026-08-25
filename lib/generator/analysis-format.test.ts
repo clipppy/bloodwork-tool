@@ -139,6 +139,22 @@ function main() {
   eq(statusChip("Out of Lab Range", false).fill, RED, "re-eval lab-range is red");
   eq(statusChip("Out of Optimal", true).label, "Out of Optimal", "re-eval optimal label");
   eq(statusChip("Out of Optimal", true).fill, AMBER, "re-eval optimal is amber");
+
+  // Re-eval carries the engine's flagDirection through, since its status
+  // wording has none. Same chip vocabulary as initial mode.
+  eq(statusChip("Out of Optimal", true, "high").direction, "(High)", "re-eval carries High");
+  eq(statusChip("Out of Optimal", true, "low").direction, "(Low)", "re-eval carries Low");
+  eq(statusChip("Out of Optimal", true, null).direction, "", "re-eval null direction stays blank");
+  eq(statusChip("Out of Optimal", true).direction, "", "re-eval omitted direction stays blank");
+  eq(statusChip("Out of Lab Range", false, "low").direction, "(Low)", "re-eval lab-range carries Low");
+  eq(statusChip("Out of Lab Range", false, "high").label, "Out of Lab Range", "carrying a direction does not change the label");
+  // A carried direction must never contradict the wording when the wording says.
+  eq(statusChip("HIGH", false, "low").direction, "(High)", "status wording wins over a carried direction");
+  eq(statusChip("SUBOPTIMAL*", true, "high").direction, "(Low)", "SUBOPTIMAL wording wins");
+  // Non-directional verdicts stay non-directional whatever is carried.
+  eq(statusChip("In Range", true, "high").direction, "", "In Range never takes a direction");
+  eq(statusChip("Not retested", null, "low").direction, "", "Not retested never takes a direction");
+  eq(statusChip("New Finding", null, "high").direction, "", "New Finding never takes a direction");
   eq(statusChip("Not retested", null).label, "Not retested", "not-retested label");
   eq(statusChip("New Finding", null).label, "New Finding", "new-finding label");
   eq(statusChip("New Finding", null).fill, NEW, "new-finding is the neutral blue-gray");
@@ -154,7 +170,8 @@ function main() {
   ];
   for (const v of vocabulary) {
     for (const within of [true, false, null] as const) {
-      const chip = statusChip(v, within);
+      for (const carried of [undefined, null, "high", "low"] as const) {
+      const chip = statusChip(v, within, carried);
       ok(
         chip.label.length <= LABEL_MAX,
         `chip label "${chip.label}" (from "${v}") is ${chip.label.length} chars, over the ${LABEL_MAX}-char budget`,
@@ -171,6 +188,7 @@ function main() {
           chip.label === "Out of Optimal",
         `direction "${chip.direction}" attached to unexpected label "${chip.label}"`,
       );
+      }
     }
   }
 

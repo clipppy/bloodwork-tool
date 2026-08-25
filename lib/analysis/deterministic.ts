@@ -24,9 +24,10 @@ import { findMarker } from "../ranges/optimal-ranges";
 export const DISCLAIMER =
   "This report is a clinical decision-support summary for the treating practitioner. " +
   "It is not a diagnosis and does not replace clinical judgment, physical exam, or " +
-  "additional physician-ordered testing. Findings marked with an asterisk (*) fall " +
-  "within the standard laboratory reference range but outside commonly used " +
-  "functional/optimal ranges.";
+  "additional physician-ordered testing. Findings chipped amber as Out of Optimal " +
+  "sit within the standard laboratory reference range but outside commonly used " +
+  "functional/optimal ranges, and are offered as context rather than as a finding " +
+  "of disease.";
 
 export const ORDERING_PRACTICE = "Carbone Chiropractic";
 export const PREPARED_FOR = "Melissa Tulisano";
@@ -350,6 +351,12 @@ export interface ComparisonRow {
   optimalRange: string;
   /** Deterministic lab/optimal verdict in the sample doc's vocabulary. */
   status: string;
+  /** The direction the flagging engine flagged, carried through so the report's
+   *  status chip can read "Out of Optimal (High)" the way the initial-mode chip
+   *  does. Copied straight off FlaggedMarker.flagDirection — never re-derived
+   *  from the rendered value — and null when the engine flagged no direction
+   *  (a three-tier band, a categorical, or a row with no current value). */
+  direction: "high" | "low" | null;
   /** Placeholder for the improved/worsened half of the Status column. */
   trend: string;
   withinLabRange: boolean | null;
@@ -396,6 +403,7 @@ export function buildComparisonGroups(flagged: FlaggedMarker[]): ComparisonGroup
       labRange: formatLabRange(m),
       optimalRange: formatOptimalRange(m),
       status: comparisonStatus(m, within),
+      direction: m.flagDirection,
       trend: TREND_PENDING,
       withinLabRange: within,
     };
@@ -533,6 +541,7 @@ export function buildMergedComparisonGroups(
       labRange: formatLabRange(m),
       optimalRange: formatOptimalRange(m),
       status: isFlaggedNow ? comparisonStatus(m, within) : "In Range",
+      direction: isFlaggedNow ? m.flagDirection : null,
       trend: computeTrend(
         m.canonicalName,
         fact?.value ?? null,
@@ -566,6 +575,7 @@ export function buildMergedComparisonGroups(
         labRange: "—",
         optimalRange: "—",
         status: "Not retested",
+        direction: null,
         trend: "Not retested",
         withinLabRange: null,
       });

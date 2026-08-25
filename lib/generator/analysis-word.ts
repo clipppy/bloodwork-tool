@@ -648,6 +648,7 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
             RC_STATUS,
             r.withinLabRange,
             r.prior === PRIOR_NOT_FOUND || r.prior === PRIOR_PENDING,
+            r.direction,
           ),
         ],
       }),
@@ -704,12 +705,13 @@ function statusCell(
   width: number,
   withinLabRange: boolean | null,
   isNew: boolean,
+  direction: "high" | "low" | null,
 ): TableCell {
   // The re-eval status cell carries two independent signals: where the value
   // sits (the chip) and which way it moved (the trend). Shading the PARAGRAPH
   // rather than the cell keeps the chip's colour without swallowing the
   // trend's own green/red, which is the column's most-read line.
-  const chip = statusChip(status, withinLabRange);
+  const chip = statusChip(status, withinLabRange, direction);
 
   // With no prior value there is nothing to trend, and the computed label
   // degrades to "Unknown", which reads as a failure rather than as what it is.
@@ -950,6 +952,15 @@ export interface StatusChip {
   fill: string;
 }
 
+/** FlaggedMarker.flagDirection -> chip line. The re-eval vocabulary carries no
+ *  direction in its wording, so the comparison row hands the engine's verdict
+ *  through instead. */
+function directionLabel(direction: "high" | "low" | null | undefined): string {
+  if (direction === "high") return "(High)";
+  if (direction === "low") return "(Low)";
+  return "";
+}
+
 /** Direction is read off the deterministic status wording, never re-derived
  *  from the value. Returns "" when that wording carries none. */
 function directionFrom(key: string): string {
@@ -969,12 +980,18 @@ function directionFrom(key: string): string {
  * Amber = inside the lab range but outside the functional optimal range; these
  *         keep the asterisk the legend and the footer disclaimer explain.
  */
-export function statusChip(status: string, withinLabRange: boolean | null): StatusChip {
+export function statusChip(
+  status: string,
+  withinLabRange: boolean | null,
+  /** The engine's flagDirection, supplied by the re-eval comparison rows whose
+   *  status wording carries none. Ignored when the wording already says. */
+  flagDirection?: "high" | "low" | null,
+): StatusChip {
   const raw = (status ?? "").trim();
   const key = raw.replace(/\*+$/, "").trim().toUpperCase();
+  const carried = directionLabel(flagDirection);
 
-  // Re-eval vocabulary. ComparisonRow carries no flagDirection, so these four
-  // print without a direction line; see NOTE in buildComparisonTable.
+  // Re-eval vocabulary: the verdict is in the wording, the direction is not.
   if (key === "IN RANGE") {
     return { label: "In Range", direction: "", fill: CHIP_IN_RANGE };
   }
@@ -985,10 +1002,10 @@ export function statusChip(status: string, withinLabRange: boolean | null): Stat
     return { label: "New Finding", direction: "", fill: CHIP_NEW };
   }
   if (key === "OUT OF LAB RANGE") {
-    return { label: "Out of Lab Range", direction: "", fill: CHIP_LAB };
+    return { label: "Out of Lab Range", direction: carried, fill: CHIP_LAB };
   }
   if (key === "OUT OF OPTIMAL") {
-    return { label: "Out of Optimal", direction: "", fill: CHIP_OPTIMAL };
+    return { label: "Out of Optimal", direction: carried, fill: CHIP_OPTIMAL };
   }
 
   // Initial-mode vocabulary. Inside the lab range => amber; the direction the
@@ -996,7 +1013,7 @@ export function statusChip(status: string, withinLabRange: boolean | null): Stat
   const outsideLab = withinLabRange !== true;
   const fill = outsideLab ? CHIP_LAB : CHIP_OPTIMAL;
   const label = outsideLab ? "Out of Lab Range" : "Out of Optimal";
-  const direction = directionFrom(key);
+  const direction = directionFrom(key) || carried;
 
   switch (key) {
     case "HIGH":

@@ -240,7 +240,7 @@ export async function POST(req: Request): Promise<Response> {
       // Deterministic scaffold only — the 2a document, on request or as the
       // recovery path after an API failure.
       if (skipNarrative) {
-        const buf = await generateReevalReport(analysis, true, null);
+        const buf = await generateReevalReport(analysis, true, null, priorPanelDate);
         return reevalResponse(buf, patientNameRaw, patientDate, false, priorHeaders);
       }
 
@@ -301,7 +301,7 @@ export async function POST(req: Request): Promise<Response> {
         ...analysis,
         comparisonGroups: buildMergedComparisonGroups(flagged, reeval.priorFacts),
       };
-      const buf = await generateReevalReport(merged, true, reeval);
+      const buf = await generateReevalReport(merged, true, reeval, priorPanelDate);
       return reevalResponse(buf, patientNameRaw, patientDate, true, priorHeaders);
     }
 
