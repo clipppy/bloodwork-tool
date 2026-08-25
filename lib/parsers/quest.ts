@@ -555,6 +555,36 @@ const PATIENT_NAMES_RE = /^(VALLES, GINA|Guy Carbone|Steven Windwer|Taylor Miles
 //   "Reference Range:"
 const REF_RANGE_SPILL_RE = /^Reference [Rr]ange:?\s*(.*)$/;
 
+// A STRATIFIED reference table, not a low-high pair:
+//   "Reference Ranges for Leptin:"
+//   "Pediatric Reference Ranges for Leptin:"
+// Quest prints these as a header followed by several indented rows broken down
+// by sex, BMI, or age. REF_RANGE_SPILL_RE used to swallow the header and
+// capture the leftover ("s for Leptin:") as if it were the range, and the rows
+// under it were dropped entirely — so the report's range cell came out garbled
+// and no lab-range flag could compute. This is matched FIRST and the whole
+// block is kept verbatim instead.
+const REF_TABLE_HEAD_RE = /^(?:[A-Za-z]+\s+)?Reference Ranges?\s+for\s+.+:\s*$/i;
+
+/** A line still inside a stratified reference table. Such rows either name a
+ *  stratum and end with a colon, or carry the numbers for one. Prose (the
+ *  method disclaimer that follows) has neither and ends the block. */
+function isReferenceTableLine(line: string): boolean {
+  if (!line) return false;
+  // A new result row ends the block even though it contains digits.
+  if (/^[A-Z][A-Z0-9 ,()/.'-]{2,}\s+[<>]?\s*\d/.test(line)) return false;
+  return /\d/.test(line) || /:$/.test(line);
+}
+
+/** Page furniture that can land in the middle of a table that spans a page
+ *  break. Skipped without ending the block, so the rows after it are still
+ *  captured. */
+const REF_TABLE_BOILERPLATE_RE =
+  /^(Printed from Health Gorilla|https?:\/\/|--\s*\d+\s+of\s+\d+\s*--|Page \d+ of \d+|Copyright ©|Test\s+In Range\s+Out Of Range)/i;
+
+/** Hard cap so a malformed PDF cannot swallow the rest of the page. */
+const REF_TABLE_MAX_LINES = 24;
+
 // Cycle-phase / interpretation-band continuation lines (capture after a
 // "Reference Range" / "Reference Ranges" header).
 const PHASE_LINE_RE =
@@ -1151,6 +1181,36 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
         continue;
       }
       inReferenceRangeBlock = false;
+    }
+
+    // Stratified reference table: keep the header and every row under it,
+    // verbatim, on the marker this block belongs to.
+    if (REF_TABLE_HEAD_RE.test(trimmed)) {
+      const last = markers[markers.length - 1];
+      const captured: string[] = [trimmed];
+      let j = i + 1;
+      let skipped = 0;
+      while (j < processedLines.length && captured.length < REF_TABLE_MAX_LINES) {
+        const next = processedLines[j].text.trim();
+        // A table that spans a page break has the page footer dropped into the
+        // middle of it; step over that rather than treating it as the end.
+        if (!next || REF_TABLE_BOILERPLATE_RE.test(next)) {
+          if (++skipped > 8) break;
+          j += 1;
+          continue;
+        }
+        if (!isReferenceTableLine(next)) break;
+        captured.push(next);
+        j += 1;
+      }
+      if (last) {
+        const block = captured.join(" ");
+        last.referenceNoteRaw = last.referenceNoteRaw
+          ? `${last.referenceNoteRaw} ${block}`
+          : block;
+      }
+      i = j - 1; // the outer loop's i++ moves past the last captured line
+      continue;
     }
 
     // Reference range spill: "Reference range: <100"

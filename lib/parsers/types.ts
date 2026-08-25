@@ -20,6 +20,12 @@ export interface ParsedMarker {
    *  " | " separator if it spans multiple lines (cycle-phase ranges,
    *  interpretation tables, etc.). Null if no reference range was present. */
   referenceRangeRaw: string | null;
+  /** Verbatim text of a printed reference block that is NOT a single low-high
+   *  pair — a stratified table like leptin's sex/BMI/age matrix. Captured so
+   *  the report can show what the lab actually printed instead of leaving the
+   *  range cell blank; `referenceRangeRaw` stays untouched so range parsing and
+   *  flagging behave exactly as before. Null for the ordinary case. */
+  referenceNoteRaw?: string | null;
   /** Page number the value appeared on (1-indexed). For debugging. */
   pageNumber: number;
   /** The original line text — useful for debugging parser issues. May contain

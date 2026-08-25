@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import ToolNav from "../tool-nav";
 
 // ----- Brand palette (matches the existing report page / Word generator) -----
 const NAVY = "#1B365D";
@@ -239,10 +240,9 @@ export default function AnalysisPage() {
         </p>
       </header>
 
+      <ToolNav active="analysis" />
+
       <div className="mx-auto max-w-2xl px-6 py-10">
-        <a href="/" className="text-sm underline" style={{ color: TEAL }}>
-          &larr; Back to the data report
-        </a>
 
         {/* Mode toggle */}
         <div className="mt-5">

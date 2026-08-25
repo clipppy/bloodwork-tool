@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import ToolNav from "./tool-nav";
 
 // ----- Brand palette (must match the Word generator) -----
 const NAVY = "#1B365D";
@@ -99,6 +100,8 @@ export default function Home() {
           Bloodwork Analysis Tool
         </p>
       </header>
+
+      <ToolNav active="data" />
 
       <div className="mx-auto max-w-2xl px-6 py-10">
         {/* Upload zone */}

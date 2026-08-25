@@ -34,6 +34,10 @@ export interface MatchedMarker {
    *  the tool has no reference range of its own. */
   labFlagFromPdf: "H" | "L" | null;
   referenceRangeRaw: string;
+  /** Verbatim stratified reference table the lab printed, when the reference
+   *  is not a single low-high pair. Carried through untouched so the report can
+   *  show what was printed instead of an empty range cell. */
+  referenceNoteRaw?: string | null;
   optimalRange: { min: number | null; max: number | null; unit: string } | null;
   matchStatus: "matched" | "unmatched" | "ambiguous";
   matchConfidence: "exact" | "normalized" | "fuzzy";
@@ -219,6 +223,7 @@ function collapseGroup(group: ParsedMarker[]): {
   const merged: ParsedMarker = {
     ...body,
     referenceRangeRaw: appendix.referenceRangeRaw,
+    referenceNoteRaw: body.referenceNoteRaw ?? appendix.referenceNoteRaw ?? null,
   };
   if (body.referenceRangeRaw !== appendix.referenceRangeRaw) {
     notes.push("appendix range preferred over body for cosmetic difference");
@@ -337,6 +342,7 @@ function dedupeMatched(rows: MatchedMarker[]): MatchedMarker[] {
       ...winner,
       unit: winner.unit.trim() ? winner.unit : loser.unit,
       referenceRangeRaw,
+      referenceNoteRaw: winner.referenceNoteRaw ?? loser.referenceNoteRaw ?? null,
       labFlagFromPdf: winner.labFlagFromPdf ?? loser.labFlagFromPdf,
       notes: [
         ...winner.notes,
@@ -384,6 +390,7 @@ export function matchMarkers(markers: ParsedMarker[]): MatchedMarker[] {
       unit: primary.unit ?? "",
       labFlagFromPdf: primary.labFlagFromPdf,
       referenceRangeRaw,
+      ...(primary.referenceNoteRaw ? { referenceNoteRaw: primary.referenceNoteRaw } : {}),
       source,
       notes,
       // Carry ANA sub-row fields through if the parser synthesized them.

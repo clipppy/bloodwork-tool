@@ -31,6 +31,7 @@ import {
 } from "docx";
 import type { FlaggedMarker } from "../flagging";
 import { parseReferenceRange, formatPrintedRange } from "../flagging/range-parse";
+import { referenceNoteForCell } from "../ranges/reference-note";
 import { findMarker } from "../ranges/optimal-ranges";
 import { MARKER_NARRATIVES } from "../narratives/marker-narratives";
 import type {
@@ -900,9 +901,24 @@ function displayLabRange(raw: string | null | undefined): string {
   return "—";
 }
 
+/**
+ * Last resort for the Lab Range cell. When there is no numeric range AND no
+ * usable printed text, fall back to the stratified reference table the lab
+ * printed rather than showing an em dash — a blank cell reads as "the lab gave
+ * us nothing", which for leptin is the opposite of the truth.
+ */
+function labRangeOrPrintedNote(m: FlaggedMarker, fallback: string): string {
+  if (fallback && fallback !== "—") return fallback;
+  return referenceNoteForCell(m.referenceNoteRaw) ?? fallback;
+}
+
 function formatRange(m: FlaggedMarker, which: "lab" | "optimal"): string {
   const rec = findMarker(m.canonicalName);
-  if (!rec) return which === "lab" ? displayLabRange(m.referenceRangeRaw) : "—";
+  if (!rec) {
+    return which === "lab"
+      ? labRangeOrPrintedNote(m, displayLabRange(m.referenceRangeRaw))
+      : "—";
+  }
 
   if (which === "lab") {
     // Show the SAME lab range the flag was decided against (from the flagging
@@ -922,7 +938,7 @@ function formatRange(m: FlaggedMarker, which: "lab" | "optimal"): string {
       if (min !== null) return `≥ ${min}`;
       if (max !== null) return `< ${max}`;
     }
-    return displayLabRange(m.referenceRangeRaw);
+    return labRangeOrPrintedNote(m, displayLabRange(m.referenceRangeRaw));
   }
 
   if (m.flagType === "three_tier_band") {

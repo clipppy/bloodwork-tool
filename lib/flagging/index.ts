@@ -48,7 +48,7 @@ export interface FlaggedMarker extends MatchedMarker {
    *  drove it, "hardcoded" when it fell back to rec.labRange, null when
    *  unmatched. Lets the report preserve the lab's original digit tokens for
    *  printed ranges (via formatPrintedRange) vs numeric-format hardcoded ones. */
-  labRangeSource: "printed" | "hardcoded" | null;
+  labRangeSource: "printed" | "hardcoded" | "sex_selected" | null;
   /** True when this flag came from the lab-flag safety net: the tool had no
    *  usable reference range (unmatched, or matched with no range) but the lab
    *  printed an H/L, so we surfaced it using the lab's flag rather than going
@@ -413,11 +413,22 @@ function applyLabFlagSafetyNet(result: FlaggedMarker): FlaggedMarker {
   };
 }
 
-export function flagMarker(m: MatchedMarker): FlaggedMarker {
-  return applyLabFlagSafetyNet(computeFlag(m));
+/** Patient sex, when the generating context knows it. Only markers whose lab
+ *  reference is printed per sex (leptin) consult it; everything else flags
+ *  identically with or without it. */
+export type FlaggingSex = "male" | "female";
+
+export interface FlaggingOptions {
+  /** Omit when unknown. A sex-stratified marker then stays display-only rather
+   *  than being flagged against the wrong sex's range. */
+  sex?: FlaggingSex | null;
 }
 
-function computeFlag(m: MatchedMarker): FlaggedMarker {
+export function flagMarker(m: MatchedMarker, opts: FlaggingOptions = {}): FlaggedMarker {
+  return applyLabFlagSafetyNet(computeFlag(m, opts));
+}
+
+function computeFlag(m: MatchedMarker, opts: FlaggingOptions = {}): FlaggedMarker {
   if (m.matchStatus !== "matched") {
     return emptyFlag(
       m,
@@ -445,8 +456,31 @@ function computeFlag(m: MatchedMarker): FlaggedMarker {
   // numeric flag types below; a non-numeric/prose range yields {null,null},
   // in which case the handlers fall back to the hardcoded rec.labRange.
   const parsedPrinted = parseReferenceRange(m.referenceRangeRaw ?? "");
-  const printed: ParsedRange | null =
+  let printed: ParsedRange | null =
     parsedPrinted.min !== null || parsedPrinted.max !== null ? parsedPrinted : null;
+
+  // A marker whose printed reference is a sex table (leptin) has no single
+  // range to parse. When the caller knows the sex, select that sex's row and
+  // treat it as the effective lab range; when it does not, leave it alone and
+  // the marker stays display-only.
+  let sexSelected = false;
+  if (!printed && rec.labRangeBySex) {
+    const sex = opts.sex;
+    if (sex === "male" || sex === "female") {
+      const picked = rec.labRangeBySex[sex];
+      if (picked.min !== null || picked.max !== null) {
+        printed = { min: picked.min, max: picked.max } as ParsedRange;
+        sexSelected = true;
+        extraNotes.push(
+          `sex-selected adult reference applied (${sex}: ${picked.min}-${picked.max}); the lab prints this marker as a sex/BMI table`,
+        );
+      }
+    } else {
+      extraNotes.push(
+        "lab prints this marker as a sex/BMI reference table and patient sex was not supplied — display only, not flagged",
+      );
+    }
+  }
 
   let result: FlaggedMarker;
   switch (rec.flagType) {
@@ -479,11 +513,15 @@ function computeFlag(m: MatchedMarker): FlaggedMarker {
   // not change any flag decision made above.
   result.effectiveLabRange = printed ?? rec.labRange;
   result.labRangeSource = printed ? "printed" : "hardcoded";
+  if (sexSelected) result.labRangeSource = "sex_selected";
   return result;
 }
 
-export function flagMarkers(matched: MatchedMarker[]): FlaggedMarker[] {
-  return matched.map(flagMarker);
+export function flagMarkers(
+  matched: MatchedMarker[],
+  opts: FlaggingOptions = {},
+): FlaggedMarker[] {
+  return matched.map((m) => flagMarker(m, opts));
 }
 
 /** Convenience: returns true if the flag indicates a problem the report

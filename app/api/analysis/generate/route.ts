@@ -200,7 +200,12 @@ export async function POST(req: Request): Promise<Response> {
   // ----- Deterministic half (never depends on the API) -----
   let analysis;
   try {
-    const flagged = flagMarkers(matchMarkers(parsed.markers));
+    // Sex is collected on the analysis form, so markers whose lab reference is
+    // printed per sex (leptin) can be flagged against the right row. The data
+    // report has no sex field and deliberately stays display-only for those.
+    const flaggingSex =
+      sex.toLowerCase() === "male" ? "male" : sex.toLowerCase() === "female" ? "female" : null;
+    const flagged = flagMarkers(matchMarkers(parsed.markers), { sex: flaggingSex });
     analysis = buildDeterministicAnalysis(flagged, {
       patientName,
       patientDate,

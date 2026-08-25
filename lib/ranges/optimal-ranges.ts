@@ -25,6 +25,14 @@ export interface MarkerRange {
   aliases: string[];
   unit: string;
   labRange: { min: number | null; max: number | null };
+  /** Lab reference that is only defined per sex, because the lab prints it that
+   *  way (leptin's sex/BMI table). Used ONLY when the generating context knows
+   *  the patient's sex; with sex unknown the marker stays display-only rather
+   *  than defaulting to one sex and mis-flagging the other. */
+  labRangeBySex?: {
+    male: { min: number | null; max: number | null };
+    female: { min: number | null; max: number | null };
+  };
   optimalRange: { min: number | null; max: number | null };
   optimalRangeBySex?: {
     male: { min: number | null; max: number | null };
@@ -3015,13 +3023,22 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     // TODO (plan step 6): add sex-aware ranges + thread patient sex into the
     // flagging engine, alongside the Testosterone sex-aware work.
     labRange: { min: null, max: null },
+    // Quest's printed adult lean reference (BMI 18-25), which is the stratum
+    // that applies to the practice's typical patient. Sex-selected at flagging
+    // time and ONLY when the caller knows the sex; leaving labRange null keeps
+    // the sex-unknown path display-only, which is what stops a male patient
+    // being flagged "low" against the female range.
+    labRangeBySex: {
+      male: { min: 0.3, max: 13.4 },
+      female: { min: 4.7, max: 23.7 },
+    },
     optimalRange: { min: null, max: null },
     flagType: "lab_range_only",
-    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27; single hardcoded range removed 2026-07-21 (sex/BMI-dependent — see TODO), display-only interim per plan step 4",
+    confirmationSource: "Melissa Tulisano, tracking form template, email 2026-05-27; single hardcoded range removed 2026-07-21 (sex/BMI-dependent — see TODO), display-only interim per plan step 4; sex-selected adult lean range added 2026-08-25",
     category: "endocrine",
     increaseCauses: [],
     decreaseCauses: [],
-    notes: "Display-only interim: no auto-flag until sex/BMI-aware ranges are added (plan step 6). Prior {4.7, 23.7} was the female range and false-flagged male patients.",
+    notes: "Sex-selected adult lean (BMI 18-25) reference: M 0.3-13.4, F 4.7-23.7. Applied only when the caller supplies the patient's sex; display-only otherwise, so a male patient is never flagged against the female range. BMI is not available to the tool, so the non-lean strata are shown in the range cell but not used for flagging.",
   },
   methylmalonic_acid: {
     canonicalName: "Methylmalonic Acid",

@@ -18,6 +18,7 @@ import type { FlaggedMarker } from "../flagging";
 import { isFlagged } from "../flagging";
 import { formatPrintedRange, parseReferenceRange } from "../flagging/range-parse";
 import { findMarker } from "../ranges/optimal-ranges";
+import { referenceNoteForCell } from "../ranges/reference-note";
 
 // ----- Fixed report text (verbatim from the Robidoux sample) -----
 
@@ -201,9 +202,12 @@ export function formatLabRange(m: FlaggedMarker): string {
     if (max !== null) return `< ${max}`;
   }
   const raw = (m.referenceRangeRaw ?? "").trim();
-  if (!raw) return "—";
-  const parsed = parseReferenceRange(raw);
-  if (parsed.min !== null || parsed.max !== null || /\d/.test(raw)) return raw;
+  const parsed = raw ? parseReferenceRange(raw) : null;
+  if (parsed && (parsed.min !== null || parsed.max !== null || /\d/.test(raw))) return raw;
+  // No numeric range: show the stratified table the lab printed rather than an
+  // em dash, which would read as "no reference was printed at all".
+  const note = referenceNoteForCell(m.referenceNoteRaw);
+  if (note) return note;
   return "—";
 }
 
