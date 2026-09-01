@@ -713,6 +713,11 @@ function statusCell(
   // trend's own green/red, which is the column's most-read line.
   const chip = statusChip(status, withinLabRange, direction);
 
+  // A row whose trend only restates its chip printed the same words twice — a
+  // grey "Not retested" chip with "Not retested" in italics under it. The chip
+  // is the signal; the echo is noise, so the second line is dropped.
+  const trendEchoesChip = !isNew && trend.trim() === chip.label;
+
   // With no prior value there is nothing to trend, and the computed label
   // degrades to "Unknown", which reads as a failure rather than as what it is.
   // Such a marker is new information on this draw, so it says so.
@@ -755,7 +760,7 @@ function statusCell(
         spacing: { after: 40 },
         children: chipRuns(chip),
       }),
-      trendLine,
+      ...(trendEchoesChip ? [] : [trendLine]),
     ],
   });
 }

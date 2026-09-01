@@ -10,6 +10,12 @@
  * came out as the garbled fragment "s for Leptin:") and no lab-range flag
  * computed. The reference must never be dropped, and where the caller knows the
  * patient's sex the correct row must drive the flag.
+ *
+ * Estradiol (second half of this file) is the same class of bug one level up,
+ * in the parser: the line "Reference range established on post-pubertal
+ * patient" opens seven lines of assay prose, and the spill rule stored the
+ * clause after "Reference range" as if it were the range. The range cell must
+ * show a real range or the captured reference table — never a prose fragment.
  */
 
 import { compactReferenceNote, referenceNoteForCell } from "./reference-note";
@@ -17,6 +23,7 @@ import { matchMarkers } from "../matcher";
 import { flagMarkers } from "../flagging";
 import { formatLabRange } from "../analysis/deterministic";
 import { parseReferenceRange } from "../flagging/range-parse";
+import { parseQuestText } from "../parsers/quest";
 import type { ParsedMarker } from "../parsers/types";
 
 let passed = 0;
@@ -169,12 +176,100 @@ function main() {
     "a normal marker's effective range is unaffected by sex",
   );
 
+  estradiol();
+
   if (failures.length > 0) {
     console.error(`\nreference-note: ${failures.length} FAILED, ${passed} passed\n`);
     console.error(failures.join("\n"));
     process.exit(1);
   }
   console.log(`reference-note: all ${passed} assertions passed`);
+}
+
+/** The assay disclaimer Quest prints under every Estradiol result. Verbatim
+ *  from samples/function/Lab Results of Record GC.pdf (identical in SW1, TM).
+ *  Line 1 is the trap: it opens "Reference range ..." with no colon. */
+const ESTRADIOL_PROSE = [
+  "Reference range established on post-pubertal patient",
+  "population. No pre-pubertal reference range",
+  "established using this assay. For any patients for",
+  "whom low Estradiol levels are anticipated (e.g. males,",
+  "pre-pubertal children and hypogonadal/post-menopausal",
+  "females), the Quest Diagnostics Nichols Institute",
+  "Estradiol, Ultrasensitive, LCMSMS assay is recommended",
+  "(order code 30289).",
+];
+
+/** GC / SW1 shape: the result row carries its own range, and the prose follows.
+ *  Verbatim from samples/function/Lab Results of Record GC.pdf. */
+const ESTRADIOL_WITH_RANGE = [
+  "Test In Range Out Of Range Reference Range Lab",
+  "ESTRADIOL Collected: 02/27/2026 12:06 PM UTC Received: 02/27/2026 12:09 PM UTC",
+  "ESTRADIOL 37 < OR = 39 pg/mL NL1",
+  ...ESTRADIOL_PROSE,
+].join("\n");
+
+/** TM shape: the result row carries NO range at all. What Quest prints instead
+ *  is a cycle-phase table, and then the same prose. Verbatim from
+ *  samples/function/Lab Results of Record TM.pdf. */
+const ESTRADIOL_PHASE_TABLE = [
+  "Test In Range Out Of Range Reference Range Lab",
+  "ESTRADIOL Collected: 03/17/2026 02:35 PM UTC Received: 03/17/2026 02:36 PM UTC",
+  "ESTRADIOL 37 pg/mL NL1",
+  "Reference Range",
+  "Female:",
+  "Follicular Phase: 30-144",
+  "Mid-Cycle: 64-357",
+  "Luteal Phase: 56-214",
+  "Postmenopausal: < or = 31",
+  ...ESTRADIOL_PROSE,
+].join("\n");
+
+/** Any word that could only have come from the disclaimer paragraph. */
+const PROSE_LEAK_RE = /post-pubertal|established (on|using)|assay|fulvestrant|order code/i;
+
+function estradiolFrom(text: string) {
+  const parsed = parseQuestText(text).markers.filter((m) => m.rawName === "ESTRADIOL");
+  ok(parsed.length === 1, `one estradiol marker parsed (got ${parsed.length})`);
+  return parsed[0];
+}
+
+function estradiol() {
+  // ----- The row that HAS a range: prose must not append to it -----
+  const withRange = estradiolFrom(ESTRADIOL_WITH_RANGE);
+  eq(withRange.referenceRangeRaw ?? "", "< OR = 39", "printed range is kept exactly");
+  ok(
+    !PROSE_LEAK_RE.test(withRange.referenceRangeRaw ?? ""),
+    `no prose appended to the range (got ${JSON.stringify(withRange.referenceRangeRaw)})`,
+  );
+  const flaggedWithRange = flagMarkers(matchMarkers([withRange]))[0];
+  eq(formatLabRange(flaggedWithRange), "≤ 39", "range cell shows the printed range");
+
+  // ----- The row that has NONE: the phase table stands in, not the prose -----
+  const phaseTable = estradiolFrom(ESTRADIOL_PHASE_TABLE);
+  ok(
+    !phaseTable.referenceRangeRaw,
+    `a row printing no range gets no range (got ${JSON.stringify(phaseTable.referenceRangeRaw)})`,
+  );
+  const note = phaseTable.referenceNoteRaw ?? "";
+  ok(!!note, "the cycle-phase table Quest printed is captured");
+  ok(/Follicular Phase: 30-144/.test(note), "the table's figures survive capture");
+  ok(/Postmenopausal: < or = 31/.test(note), "capture runs to the last stratum row");
+  ok(!PROSE_LEAK_RE.test(note), `capture stops before the prose (got ${JSON.stringify(note)})`);
+
+  const flaggedPhase = flagMarkers(matchMarkers([phaseTable]))[0];
+  const cell = formatLabRange(flaggedPhase);
+  ok(cell !== "—", "range cell is not an em dash when the lab printed a table");
+  ok(/Follicular Phase: 30-144/.test(cell), `range cell leads with the printed table (got ${cell})`);
+  ok(!PROSE_LEAK_RE.test(cell), `range cell carries no prose (got ${JSON.stringify(cell)})`);
+  ok(cell.length <= 46, `range cell fits the column (${cell.length} chars)`);
+
+  // ----- The rule generalised: a colon-less "Reference range ..." prose line
+  // never becomes a range, while a real spill still does. -----
+  const spill = parseQuestText(
+    ["Test In Range Out Of Range Reference Range Lab", "HOMOCYSTEINE 8.4 umol/L NL1", "Reference range: <10.4"].join("\n"),
+  ).markers.find((m) => m.rawName === "HOMOCYSTEINE");
+  eq(spill?.referenceRangeRaw ?? "", "<10.4", "a genuine spilled range is still captured");
 }
 
 main();

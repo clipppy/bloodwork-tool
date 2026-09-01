@@ -555,6 +555,33 @@ const PATIENT_NAMES_RE = /^(VALLES, GINA|Guy Carbone|Steven Windwer|Taylor Miles
 //   "Reference Range:"
 const REF_RANGE_SPILL_RE = /^Reference [Rr]ange:?\s*(.*)$/;
 
+/** Qualitative results a lab prints instead of a numeric range. Kept small and
+ *  anchored: these are whole answers ("Negative"), not words that happen to
+ *  appear inside prose. */
+const QUALITATIVE_SPILL_RE =
+  /^(negative|positive|non-?reactive|reactive|not detected|detected|normal)\b/i;
+
+/**
+ * Is the text after "Reference range" an actual range, or the opening clause of
+ * a narrative paragraph?
+ *
+ * Estradiol is the case this exists for. Quest prints, on its own line:
+ *   "Reference range established on post-pubertal patient"
+ * followed by six more lines of assay prose. REF_RANGE_SPILL_RE matched it (the
+ * colon is optional) and captured "established on post-pubertal patient" as the
+ * range — appended after a good range on GC/SW1, and standing in as the ONLY
+ * range on TM, where the row carries none. Same class of bug as the leptin
+ * header swallow: a prose line dressed as a reference.
+ *
+ * A real spill carries a figure ("<100", "0.4-4.5") or is a qualitative verdict.
+ * Prose carries neither, so it is consumed silently instead of stored.
+ */
+function looksLikeSpilledRange(text: string): boolean {
+  if (!text) return false;
+  if (/\d/.test(text)) return true;
+  return QUALITATIVE_SPILL_RE.test(text);
+}
+
 // A STRATIFIED reference table, not a low-high pair:
 //   "Reference Ranges for Leptin:"
 //   "Pediatric Reference Ranges for Leptin:"
@@ -584,6 +611,52 @@ const REF_TABLE_BOILERPLATE_RE =
 
 /** Hard cap so a malformed PDF cannot swallow the rest of the page. */
 const REF_TABLE_MAX_LINES = 24;
+
+/** A stratum a menstrual-cycle / life-stage reference table is broken down by.
+ *  Two or more of these is what distinguishes a real reference table from the
+ *  interpretation notes and literature citations that also follow a bare
+ *  "Reference Range" header (hs-CRP's "Optimal <1.0 / Jellinger PS et al. ..."
+ *  is the one to keep out). */
+const CYCLE_PHASE_LABEL_RE =
+  /^(Follicular Phase|Mid-?[Cc]ycle|Luteal Phase|Post-?menopausal|Pre-?menopausal|Non-?pregnant|Pregnant)\b/i;
+
+/** Minimum stratum rows before a block counts as a reference table. */
+const REF_NOTE_MIN_STRATA = 2;
+
+/**
+ * Append a cycle-phase reference table starting at `from` to
+ * `marker.referenceNoteRaw`, verbatim, without consuming the lines. Stops at
+ * the first line that is not part of the table (prose, a new result row, page
+ * furniture), and stores nothing unless the block really is such a table.
+ *
+ * Display only — `referenceNoteRaw` never feeds range parsing or flagging.
+ */
+function captureReferenceNote(
+  marker: ParsedMarker | undefined,
+  lines: { text: string }[],
+  from: number,
+): void {
+  if (!marker) return;
+  const captured: string[] = [];
+  let strata = 0;
+  for (let j = from; j < lines.length && captured.length < REF_TABLE_MAX_LINES; j++) {
+    const next = lines[j].text.trim();
+    if (!next || REF_TABLE_BOILERPLATE_RE.test(next)) break;
+    if (!isReferenceTableLine(next)) break;
+    // The next marker's own rows end the table even when they look table-ish:
+    // "LH Collected: ..." (its timestamp header) and "LH 4.9 mIU/mL NL1" (its
+    // result) both carry digits, which isReferenceTableLine alone accepts.
+    if (/\bCollected:\s/.test(next)) break;
+    if (tryParseMarkerRow(next)) break;
+    if (CYCLE_PHASE_LABEL_RE.test(next)) strata += 1;
+    captured.push(next);
+  }
+  if (strata < REF_NOTE_MIN_STRATA) return;
+  const block = captured.join(" ");
+  marker.referenceNoteRaw = marker.referenceNoteRaw
+    ? `${marker.referenceNoteRaw} ${block}`
+    : block;
+}
 
 // Cycle-phase / interpretation-band continuation lines (capture after a
 // "Reference Range" / "Reference Ranges" header).
@@ -1057,8 +1130,16 @@ function tryParseMarkerRow(line: string): RowParse | null {
 
 export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
-  const text = (await parser.getText()).text ?? "";
+  return parseQuestText((await parser.getText()).text ?? "");
+}
 
+/**
+ * The whole parse, from extracted page text. Split out from parseQuestPdf so a
+ * fixture test can pin the line-level rules (which reference lines belong to
+ * which marker, and which are prose) against the verbatim lines a sample PDF
+ * prints, without shipping a PDF into the test suite.
+ */
+export function parseQuestText(text: string): ParseResult {
   const meta = extractPatientMeta(text);
 
   // Track page numbers via the form-feed character pdf-parse inserts between
@@ -1127,6 +1208,7 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
       // Some patterns (e.g. "Reference Range") need to flip context.
       if (/^Reference Range$/i.test(trimmed)) {
         inReferenceRangeBlock = true;
+        captureReferenceNote(markers[markers.length - 1], processedLines, i + 1);
       }
       continue;
     }
@@ -1167,6 +1249,16 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
     // Reference Range header → start a phase block
     if (/^Reference Ranges?\s*:?$/i.test(trimmed)) {
       inReferenceRangeBlock = true;
+      // Also keep the block verbatim as a display-only note. This is a pure
+      // LOOKAHEAD — it consumes nothing, so the phase-line handling below still
+      // runs and referenceRangeRaw (and therefore every flag) is untouched.
+      //
+      // TM's Estradiol is why: its row prints no range at all, and the table
+      // under this header is stratified by cycle phase ("Female: / Follicular
+      // Phase: 30-144 / ..."), which PHASE_LINE_RE only partly matches. Without
+      // this the cell fell back to whatever prose the spill rule had grabbed.
+      // Used only where the cell would otherwise be an em dash.
+      captureReferenceNote(markers[markers.length - 1], processedLines, i + 1);
       continue;
     }
 
@@ -1213,14 +1305,18 @@ export async function parseQuestPdf(buffer: Buffer): Promise<ParseResult> {
       continue;
     }
 
-    // Reference range spill: "Reference range: <100"
+    // Reference range spill: "Reference range: <100". A line that only reads
+    // LIKE a spill ("Reference range established on post-pubertal patient") is
+    // still consumed here — it is reference furniture, not a marker row — but
+    // its prose is never stored as a range.
     const refSpill = trimmed.match(REF_RANGE_SPILL_RE);
     if (refSpill) {
+      const spilled = refSpill[1].trim();
       const last = markers[markers.length - 1];
-      if (last && refSpill[1]) {
+      if (last && looksLikeSpilledRange(spilled)) {
         last.referenceRangeRaw = last.referenceRangeRaw
-          ? `${last.referenceRangeRaw} | ${refSpill[1].trim()}`
-          : refSpill[1].trim();
+          ? `${last.referenceRangeRaw} | ${spilled}`
+          : spilled;
       }
       continue;
     }
