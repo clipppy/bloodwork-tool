@@ -31,7 +31,7 @@ const patternBlock = {
       description:
         "Heading naming the markers in this pattern and the direction they moved.",
     },
-    bullets: stringArray("One point per line: mechanism, contributing factor, or what to confirm next."),
+    bullets: stringArray("At most three or four short plain-language bullets written for the patient: everyday words, one or two short sentences each."),
     symptomTags: stringArray(
       "Short tags naming the patient-reported symptoms from the intake that this " +
         "pattern plausibly explains. Reasoning only: no lab values, no numbers, no " +

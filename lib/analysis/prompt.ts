@@ -497,12 +497,26 @@ function readChiefConcern(value: unknown): string {
   return s || "the findings on this panel";
 }
 
+/** True for the `{phase:"", goal:"", bullets:[]}` filler entry the structured-
+ *  output API occasionally appends after the real phases. Only an entry with
+ *  no content anywhere qualifies — a phase with a name but no bullets is a
+ *  malformed narrative and must still fail validation below. */
+export function isEmptyPhaseEntry(entry: unknown): boolean {
+  const e = (entry ?? {}) as { phase?: unknown; goal?: unknown; bullets?: unknown };
+  const blank = (v: unknown) => typeof v !== "string" || !v.trim();
+  const bullets = Array.isArray(e.bullets) ? e.bullets : [];
+  return blank(e.phase) && blank(e.goal) && bullets.every(blank);
+}
+
 function phasesToBlocks(value: unknown, field: string): NarrativeBlock[] {
-  if (!Array.isArray(value) || value.length === 0) {
+  const entries = Array.isArray(value)
+    ? value.filter((entry) => !isEmptyPhaseEntry(entry))
+    : [];
+  if (entries.length === 0) {
     throw new NarrativeParseError(`The model returned no "${field}" content.`);
   }
   const blocks: NarrativeBlock[] = [];
-  for (const entry of value) {
+  for (const entry of entries) {
     const phase = requireText((entry as { phase?: unknown })?.phase, field);
     blocks.push({ type: "heading", text: phase });
     blocks.push({
