@@ -16,6 +16,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import ToolNav from "../tool-nav";
+import {
+  DEFAULT_HORMONE_STATUS,
+  HORMONE_STATUS_OPTIONS,
+} from "../../lib/analysis/hormone-ranges";
 
 // ----- Brand palette (matches the existing report page / Word generator) -----
 const NAVY = "#1B365D";
@@ -65,6 +69,7 @@ export default function AnalysisPage() {
   const [priorReviewed, setPriorReviewed] = useState(false);
   const [dob, setDob] = useState("");
   const [sex, setSex] = useState("");
+  const [hormoneStatus, setHormoneStatus] = useState<string>(DEFAULT_HORMONE_STATUS);
   const [intake, setIntake] = useState("");
   const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
   const [elapsed, setElapsed] = useState(0);
@@ -177,6 +182,8 @@ export default function AnalysisPage() {
       form.append("patientDate", patientDate);
       form.append("dob", dob);
       form.append("sex", sex);
+      // Only meaningful for a female patient; the server ignores it otherwise.
+      form.append("hormoneStatus", sex === "female" ? hormoneStatus : "");
       form.append("intake", intake);
       form.append("mode", mode);
       if (mode === "reeval" && priorFile) {
@@ -590,6 +597,41 @@ export default function AnalysisPage() {
             </p>
           </div>
         </div>
+
+        {/* Cycle phase / menopausal status — female only */}
+        {sex === "female" && (
+          <div className="mt-4">
+            <label
+              htmlFor="analysis-hormone-status"
+              className="mb-1 block text-sm font-medium"
+              style={{ color: NAVY }}
+            >
+              Cycle phase / menopausal status{" "}
+              <span className="font-normal opacity-70">(optional)</span>
+            </label>
+            <select
+              id="analysis-hormone-status"
+              value={hormoneStatus}
+              onChange={(e) => setHormoneStatus(e.target.value)}
+              className="w-full rounded-md border bg-white px-3 py-2 outline-none focus:ring-2"
+              style={{ borderColor: TEAL }}
+            >
+              {HORMONE_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs opacity-70">
+              Selects the functional optimal ranges for the hormone panel.
+              With &ldquo;Not sure&rdquo;, phase-dependent hormones (estradiol,
+              progesterone, FSH, LH) are judged against the lab range only.
+              Hormonal birth control or HRT turns the hormone optimals off.
+              Printed on the report header; sent to the model as clinical
+              context.
+            </p>
+          </div>
+        )}
 
         {/* Intake / symptoms */}
         <div className="mt-6">

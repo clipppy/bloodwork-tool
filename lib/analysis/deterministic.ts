@@ -19,6 +19,11 @@ import { isFlagged } from "../flagging";
 import { formatPrintedRange, parseReferenceRange } from "../flagging/range-parse";
 import { findMarker } from "../ranges/optimal-ranges";
 import { referenceNoteForCell } from "../ranges/reference-note";
+import {
+  formatOptimalWindow,
+  hormoneOverlayOf,
+  type HormoneOverlaySummary,
+} from "./hormone-ranges";
 
 // ----- Fixed report text (verbatim from the Robidoux sample) -----
 
@@ -73,6 +78,12 @@ export interface AnalysisHeader {
   reported: string;
   orderingPractice: string;
   preparedFor: string;
+  /** "Female" / "Male" / "—" as entered on the form. */
+  sex: string;
+  /** The selected cycle phase / menopausal status label for a female patient
+   *  ("Early follicular (day 1-5)", "Not sure", ...), "n/a" otherwise. Printed
+   *  so the report documents which hormone ranges were in force. */
+  hormoneStatus: string;
 }
 
 export interface ChartRow {
@@ -108,6 +119,9 @@ export interface DeterministicAnalysis {
    *  the API payload is allowed to carry. */
   age: number | null;
   sex: PatientSex;
+  /** What the female-hormone overlay did on this panel (status, markers it
+   *  supplied an optimal for, plain-English notes). null when it did not run. */
+  hormone: HormoneOverlaySummary | null;
 }
 
 export interface AnalysisInputs {
@@ -119,6 +133,9 @@ export interface AnalysisInputs {
   sex?: string | null;
   collectedDate?: string | null;
   reportedDate?: string | null;
+  /** Result of lib/analysis/hormone-ranges applyHormoneOverlay(), when the
+   *  caller ran it over the flagged set it is passing in. */
+  hormone?: HormoneOverlaySummary | null;
 }
 
 /** Whole years between a "YYYY-MM-DD" DOB and `asOf`. null if unparseable. */
@@ -215,6 +232,11 @@ export function formatLabRange(m: FlaggedMarker): string {
  *  lab_range_only markers have no separate optimal, so they echo the lab range
  *  (the sample doc does the same for Non-HDL Cholesterol). */
 export function formatOptimalRange(m: FlaggedMarker): string {
+  // Analysis-path hormone overlay: the functional window came from the
+  // practitioner's female hormone table, not the dictionary.
+  const overlay = hormoneOverlayOf(m);
+  if (overlay) return formatOptimalWindow(overlay.optimal);
+
   const rec = findMarker(m.canonicalName);
   if (!rec) return "—";
 
@@ -477,6 +499,9 @@ export function computeTrend(
    *  markers such as Non-HDL Cholesterol carry their range on the report, not
    *  in the dictionary. */
   fallbackWindow?: { min: number | null; max: number | null } | null,
+  /** A window that outranks the dictionary's: the female-hormone overlay's
+   *  functional optimal for this marker, when the analysis applied one. */
+  preferredWindow?: { min: number | null; max: number | null } | null,
 ): TrendLabel {
   if (notComparable) return "Not comparable";
   if (currentValue === null || currentValue === undefined) return "Not retested";
@@ -489,13 +514,15 @@ export function computeTrend(
   const rec = findMarker(canonicalName);
   const hasBounds = (w: { min: number | null; max: number | null } | null | undefined) =>
     !!w && (w.min !== null || w.max !== null);
-  const window = hasBounds(rec?.optimalRange)
-    ? rec!.optimalRange
-    : hasBounds(rec?.labRange)
-      ? rec!.labRange
-      : hasBounds(fallbackWindow)
-        ? fallbackWindow!
-        : null;
+  const window = hasBounds(preferredWindow)
+    ? preferredWindow!
+    : hasBounds(rec?.optimalRange)
+      ? rec!.optimalRange
+      : hasBounds(rec?.labRange)
+        ? rec!.labRange
+        : hasBounds(fallbackWindow)
+          ? fallbackWindow!
+          : null;
 
   const devPrior = deviationFromOptimal(p, window);
   const devCurrent = deviationFromOptimal(c, window);
@@ -552,6 +579,7 @@ export function buildMergedComparisonGroups(
         m.value,
         fact?.notComparable,
         m.effectiveLabRange,
+        hormoneOverlayOf(m)?.optimal ?? null,
       ),
       withinLabRange: within,
     };
@@ -688,6 +716,15 @@ export function buildDeterministicAnalysis(
       : dobDisplay
     : "—";
 
+  const sex = normalizeSex(inputs.sex);
+  const hormone = inputs.hormone ?? null;
+  const sexDisplay = sex === "female" ? "Female" : sex === "male" ? "Male" : "—";
+  // Self-documenting header: which hormone ranges were in force. Only a female
+  // patient has a status; everyone else reads "n/a" so the cell never looks
+  // like a value the tool should have had.
+  const hormoneStatus =
+    sex === "female" ? (hormone?.statusLabel ?? "Not provided") : "n/a";
+
   return {
     header: {
       patientName: inputs.patientName,
@@ -696,11 +733,14 @@ export function buildDeterministicAnalysis(
       reported,
       orderingPractice: ORDERING_PRACTICE,
       preparedFor: PREPARED_FOR,
+      sex: sexDisplay,
+      hormoneStatus,
     },
     rows: buildChartRows(flagged),
     comparisonGroups: buildComparisonGroups(flagged),
     reassuring: buildReassuring(flagged),
     age,
-    sex: normalizeSex(inputs.sex),
+    sex,
+    hormone,
   };
 }

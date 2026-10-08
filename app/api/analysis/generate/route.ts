@@ -31,6 +31,10 @@ import {
   computePriorInterval,
 } from "../../../../lib/analysis/deterministic";
 import {
+  applyHormoneOverlay,
+  parseHormoneStatus,
+} from "../../../../lib/analysis/hormone-ranges";
+import {
   assertNoIdentifiers,
   buildPayload,
   buildReevalPayload,
@@ -138,6 +142,9 @@ export async function POST(req: Request): Promise<Response> {
   const patientDateRaw = (form.get("patientDate") as string | null)?.trim() || "";
   const dob = (form.get("dob") as string | null)?.trim() || "";
   const sex = (form.get("sex") as string | null)?.trim() || "";
+  // Cycle phase / menopausal status. Clinical context, not an identifier;
+  // unrecognised or missing values read as "Not sure" (no phase ranges).
+  const hormoneStatus = parseHormoneStatus(form.get("hormoneStatus"));
   const intake = (form.get("intake") as string | null) || "";
   const skipNarrative = (form.get("skipNarrative") as string | null) === "1";
   const mode = (form.get("mode") as string | null) === "reeval" ? "reeval" : "initial";
@@ -205,7 +212,14 @@ export async function POST(req: Request): Promise<Response> {
     // report has no sex field and deliberately stays display-only for those.
     const flaggingSex =
       sex.toLowerCase() === "male" ? "male" : sex.toLowerCase() === "female" ? "female" : null;
-    const flagged = flagMarkers(matchMarkers(parsed.markers), { sex: flaggingSex });
+    const engineFlagged = flagMarkers(matchMarkers(parsed.markers), { sex: flaggingSex });
+    // Female hormone functional ranges (analysis path only). A no-op unless
+    // sex is female; the lab tier the engine decided is never overridden.
+    const overlay = applyHormoneOverlay(engineFlagged, {
+      sex: flaggingSex,
+      status: hormoneStatus,
+    });
+    const flagged = overlay.markers;
     analysis = buildDeterministicAnalysis(flagged, {
       patientName,
       patientDate,
@@ -213,6 +227,7 @@ export async function POST(req: Request): Promise<Response> {
       sex,
       collectedDate: parsed.patientMeta.collectedDate,
       reportedDate: parsed.patientMeta.reportedDate,
+      hormone: overlay.summary,
     });
 
     // ----- Re-evaluation -----
@@ -272,6 +287,7 @@ export async function POST(req: Request): Promise<Response> {
         // not an identifier and collides with the payload's own `patient` key.
         patientName: patientNameRaw,
         dob,
+        hormone: analysis.hormone,
         priorPanelInterval: interval,
         priorReportText: ingested.redactedText,
       });
@@ -323,6 +339,7 @@ export async function POST(req: Request): Promise<Response> {
       // See above: the typed name, never the display fallback.
       patientName: patientNameRaw,
       dob,
+      hormone: analysis.hormone,
     });
     const serialized = serializePayload(payload);
     assertNoIdentifiers(serialized, { patientName: patientNameRaw, dob });

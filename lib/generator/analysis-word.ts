@@ -234,6 +234,7 @@ function buildDocument(
       children.push(blank());
     }
   }
+  children.push(...buildHormoneNotes(analysis));
   // Narrative reading of the in-range markers (LLM), after the code-built list.
   if (narrative) children.push(...renderBlocks(narrative.reassuring));
   children.push(...buildReassuringParagraphs(analysis));
@@ -361,6 +362,12 @@ function buildReevalDocument(
         ...(h.dobAge !== "—"
           ? [runPlain("   |   "), runBold("DOB / Age: "), runPlain(h.dobAge)]
           : []),
+        ...(h.sex !== "—"
+          ? [runPlain("   |   "), runBold("Sex: "), runPlain(h.sex)]
+          : []),
+        ...(h.hormoneStatus !== "n/a"
+          ? [runPlain("   |   "), runBold("Hormonal Status: "), runPlain(h.hormoneStatus)]
+          : []),
       ],
     }),
     new Paragraph({
@@ -439,6 +446,7 @@ function buildReevalDocument(
       );
       children.push(blank());
     }
+    children.push(...buildHormoneNotes(analysis));
     children.push(
       new Paragraph({
         spacing: { after: 240 },
@@ -792,10 +800,36 @@ function buildHeaderTable(analysis: DeterministicAnalysis): Table {
     columnWidths: HEADER_GRID,
     rows: [
       row("Patient:", h.patientName, "DOB / Age:", h.dobAge),
+      // Sex and hormonal status document which hormone ranges were in force.
+      row("Sex:", h.sex, "Hormonal Status:", h.hormoneStatus),
       row("Specimen Collected:", h.collected, "Reported:", h.reported),
       row("Ordering Practice:", h.orderingPractice, "Prepared For:", h.preparedFor),
     ],
   });
+}
+
+/**
+ * Footnote under the chart explaining what the female-hormone overlay did on
+ * this panel: which hormones were judged against the practitioner's functional
+ * ranges and for which status, and which were left on the lab range and why.
+ * Nothing when the panel carries none of the covered hormones.
+ */
+function buildHormoneNotes(analysis: DeterministicAnalysis): Paragraph[] {
+  const notes = analysis.hormone?.notes ?? [];
+  if (!notes.length) return [];
+  return [
+    new Paragraph({
+      spacing: { after: 60 },
+      children: [runBold("Hormone ranges: ", NAVY, 18)],
+    }),
+    ...notes.map(
+      (n, i) =>
+        new Paragraph({
+          spacing: { after: i === notes.length - 1 ? 200 : 60 },
+          children: [runItalic(n, GREY, 18)],
+        }),
+    ),
+  ];
 }
 
 // Draw block: label/value across the full width.

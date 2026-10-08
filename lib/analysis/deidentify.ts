@@ -30,6 +30,7 @@ import {
   withinLabRange,
   type PatientSex,
 } from "./deterministic";
+import type { HormoneOverlaySummary } from "./hormone-ranges";
 
 export const REDACTED = "[REDACTED]";
 
@@ -54,11 +55,19 @@ export interface AnalysisPayload {
   patient: {
     age: number | null;
     sex: PatientSex;
+    /** Practitioner-selected cycle phase / menopausal status label for a
+     *  female patient, e.g. "Early follicular (day 1-5)". Clinical context,
+     *  not an identifier. null when sex is not female. */
+    hormoneStatus: string | null;
   };
   /** Redacted intake text, or null when the practitioner left it blank. */
   intake: string | null;
   flaggedMarkers: PayloadMarker[];
   inRangeMarkers: PayloadInRangeMarker[];
+  /** What the female-hormone overlay did (which hormones were flagged against
+   *  practitioner-supplied functional ranges, which were left on the lab range
+   *  and why). Empty when it did not apply. */
+  hormoneNotes: string[];
 }
 
 export interface DeidentifyInputs {
@@ -69,6 +78,8 @@ export interface DeidentifyInputs {
   patientName: string;
   /** Used only to redact the DOB back out of the intake text. Not sent. */
   dob?: string | null;
+  /** Hormone overlay summary from the deterministic step, when it ran. */
+  hormone?: HormoneOverlaySummary | null;
 }
 
 // ----- Structural (label-driven) redaction -----
@@ -376,11 +387,16 @@ export function buildPayload(
     ? redactIntake(inputs.intake, inputs.patientName, inputs.dob)
     : null;
 
+  const hormone = inputs.hormone ?? null;
+  const hormoneStatus =
+    inputs.sex === "female" && hormone?.statusLabel ? hormone.statusLabel : null;
+
   return {
-    patient: { age: inputs.age, sex: inputs.sex },
+    patient: { age: inputs.age, sex: inputs.sex, hormoneStatus },
     intake,
     flaggedMarkers,
     inRangeMarkers,
+    hormoneNotes: hormone ? [...hormone.notes] : [],
   };
 }
 
@@ -390,6 +406,8 @@ export interface ReevalPayload {
   patient: {
     age: number | null;
     sex: PatientSex;
+    /** See AnalysisPayload.patient.hormoneStatus. */
+    hormoneStatus: string | null;
     /** "~8 months" — the interval only. The prior panel's date never leaves. */
     priorPanelInterval: string | null;
   };
@@ -401,6 +419,8 @@ export interface ReevalPayload {
   currentAllMarkers: PayloadInRangeMarker[];
   /** De-identified prior report text — the ONLY source of prior values. */
   priorReportText: string;
+  /** See AnalysisPayload.hormoneNotes. */
+  hormoneNotes: string[];
 }
 
 export interface ReevalDeidentifyInputs extends DeidentifyInputs {
@@ -418,6 +438,7 @@ export function buildReevalPayload(
     patient: {
       age: inputs.age,
       sex: inputs.sex,
+      hormoneStatus: base.patient.hormoneStatus,
       priorPanelInterval: inputs.priorPanelInterval,
     },
     intake: base.intake,
@@ -429,6 +450,7 @@ export function buildReevalPayload(
         value: `${m.value}${m.unit ? ` ${m.unit}` : ""}`,
       })),
     priorReportText: inputs.priorReportText,
+    hormoneNotes: base.hormoneNotes,
   };
 }
 

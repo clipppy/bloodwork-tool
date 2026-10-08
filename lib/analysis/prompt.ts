@@ -178,6 +178,39 @@ function fieldSpec(hasIntake: boolean): string {
   ].join("\n");
 }
 
+/**
+ * Female hormone context lines, shared by both modes. Empty when the overlay
+ * did not run (sex not female). The status is clinical context the model may
+ * use; the flags themselves were computed in code against the practitioner's
+ * phase-appropriate functional ranges and are already in the marker data.
+ */
+export function hormoneContextLines(
+  hormoneStatus: string | null,
+  hormoneNotes: string[],
+): string[] {
+  if (!hormoneStatus && hormoneNotes.length === 0) return [];
+  const out: string[] = [];
+  if (hormoneStatus) {
+    out.push(
+      `Cycle phase / menopausal status (selected by the practitioner): ${hormoneStatus}.`,
+    );
+  }
+  out.push(
+    "Female hormone markers in the marker data were flagged against functional",
+    "optimal ranges supplied by the practitioner and chosen for that phase/status;",
+    "where a hormone has no such range (phase not provided, hormonal birth control",
+    "or HRT, or a hormone the table does not cover) it was judged against the lab",
+    "range only. Cite those flags as given; do not re-derive a hormone range of",
+    "your own, and do not say a hormone is normal or abnormal for a phase other",
+    "than the one stated.",
+  );
+  if (hormoneNotes.length) {
+    out.push("Hormone range notes from the tool:");
+    for (const n of hormoneNotes) out.push(`- ${n}`);
+  }
+  return out;
+}
+
 export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
   const hasIntake = !!payload.intake && payload.intake.trim().length > 0;
   const ageSex = [
@@ -187,6 +220,7 @@ export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
 
   return [
     `Patient context: ${ageSex}.`,
+    ...hormoneContextLines(payload.patient.hormoneStatus, payload.hormoneNotes ?? []),
     "",
     "AUTHORITATIVE MARKER DATA (computed by the tool; treat as ground truth):",
     "```json",
@@ -266,6 +300,7 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     interval
       ? `Time between the prior panel and this one: ${interval}.`
       : "The interval between the two panels was not provided; do not guess it.",
+    ...hormoneContextLines(payload.patient.hormoneStatus, payload.hormoneNotes ?? []),
     "",
     "CURRENT PANEL (computed by the tool; authoritative):",
     "```json",
