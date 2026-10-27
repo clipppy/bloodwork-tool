@@ -24,6 +24,8 @@ import {
   PHASE_DEPENDENT_RANGES,
   PHASE_INDEPENDENT_RANGES,
   applyHormoneOverlay,
+  computeCycleDay,
+  cycleDayToStatus,
   formatOptimalWindow,
   hormoneOverlayOf,
   hormoneStatusLabel,
@@ -459,6 +461,49 @@ ok(formatOptimalWindow({ min: null, max: 0.2 }) === "≤ 0.2", "<= 0.2");
   const p = buildPayload(mixedPanel, { age: null, sex: "male", intake: "", patientName: "T" });
   ok(p.patient.hormoneStatus === null && p.hormoneNotes.length === 0, "male payload: no hormone status / notes");
   ok(!buildInitialAnalysisPrompt(p).includes("Cycle phase"), "male prompt: no hormone context");
+}
+
+// ----- 17. cycleDayToStatus (boundary days + invalid) -----
+
+{
+  const expect: Array<[number, HormoneStatus]> = [
+    [1, "early_follicular"],
+    [5, "early_follicular"],
+    [6, "mid_follicular"],
+    [11, "mid_follicular"],
+    [12, "ovulatory"],
+    [15, "ovulatory"],
+    [16, "luteal"],
+    [20, "luteal"],
+    [21, "mid_luteal"],
+    [35, "mid_luteal"],
+  ];
+  for (const [day, status] of expect) {
+    ok(cycleDayToStatus(day) === status, `cycle day ${day} -> ${status}`);
+  }
+  for (const bad of [0, -3, 36, 40, Number.NaN, Number.POSITIVE_INFINITY]) {
+    ok(cycleDayToStatus(bad) === null, `cycle day ${bad} -> null`);
+  }
+  ok(cycleDayToStatus(18) === "luteal", "day 18 -> luteal");
+  ok(cycleDayToStatus(28) === "mid_luteal", "day 28 -> mid-luteal");
+}
+
+// ----- 18. computeCycleDay -----
+
+{
+  ok(computeCycleDay("2026-03-01", "2026-03-18") === 18, "LMP 3/1, draw 3/18 -> day 18");
+  ok(computeCycleDay("2026-03-01", "2026-03-01") === 1, "draw on the LMP -> day 1");
+  ok(computeCycleDay("2026-02-20", "2026-03-05") === 14, "across a month boundary -> day 14");
+  ok(computeCycleDay("2026-03-18", "2026-03-01") === null, "draw before LMP -> null");
+  ok(computeCycleDay("", "2026-03-18") === null, "missing LMP -> null");
+  ok(computeCycleDay("2026-03-01", "") === null, "missing draw -> null");
+  ok(computeCycleDay("not a date", "2026-03-18") === null, "unparseable LMP -> null");
+  ok(computeCycleDay("2026-02-30", "2026-03-18") === null, "impossible calendar date -> null");
+  // Composed: LMP + draw -> status, the path the form takes.
+  const day = computeCycleDay("2026-03-01", "2026-03-18");
+  ok(day !== null && cycleDayToStatus(day) === "luteal", "LMP path resolves to luteal");
+  const late = computeCycleDay("2026-01-01", "2026-03-18");
+  ok(late !== null && cycleDayToStatus(late) === null, "LMP too long ago -> null (manual selection kept)");
 }
 
 // ----- Report -----

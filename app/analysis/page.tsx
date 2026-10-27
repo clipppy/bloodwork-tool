@@ -19,7 +19,19 @@ import ToolNav from "../tool-nav";
 import {
   DEFAULT_HORMONE_STATUS,
   HORMONE_STATUS_OPTIONS,
+  computeCycleDay,
+  cycleDayToStatus,
+  hormoneStatusLabel,
+  parseHormoneStatus,
 } from "../../lib/analysis/hormone-ranges";
+
+/** Statuses the practitioner picks deliberately; the LMP / cycle-day inputs
+ *  never override one of these. */
+const NON_CYCLING_STATUSES: ReadonlySet<string> = new Set([
+  "postmenopausal",
+  "postmenopausal_hrt",
+  "birth_control",
+]);
 
 // ----- Brand palette (matches the existing report page / Word generator) -----
 const NAVY = "#1B365D";
@@ -70,10 +82,35 @@ export default function AnalysisPage() {
   const [dob, setDob] = useState("");
   const [sex, setSex] = useState("");
   const [hormoneStatus, setHormoneStatus] = useState<string>(DEFAULT_HORMONE_STATUS);
+  const [lmpDate, setLmpDate] = useState("");
+  const [cycleDayInput, setCycleDayInput] = useState("");
   const [intake, setIntake] = useState("");
   const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
   const [elapsed, setElapsed] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+
+  // Cycle day at draw: a typed day wins; otherwise LMP + the Patient Date
+  // (the draw date) when both are present. Null when nothing usable is entered.
+  const typedCycleDay = cycleDayInput.trim() === "" ? null : Number(cycleDayInput);
+  const cycleDay: number | null =
+    typedCycleDay !== null
+      ? Number.isFinite(typedCycleDay)
+        ? typedCycleDay
+        : null
+      : lmpDate && patientDate
+        ? computeCycleDay(lmpDate, patientDate)
+        : null;
+  const cycleInputsPresent = typedCycleDay !== null || lmpDate !== "";
+  const derivedStatus = cycleDay === null ? null : cycleDayToStatus(cycleDay);
+
+  // Auto-select the phase from the cycle inputs. A deliberately chosen
+  // non-cycling status is never overridden, and because this only runs when
+  // the cycle inputs (or draw date) change, a later manual dropdown choice
+  // stands until those inputs change again.
+  useEffect(() => {
+    if (sex !== "female" || derivedStatus === null) return;
+    setHormoneStatus((prev) => (NON_CYCLING_STATUSES.has(prev) ? prev : derivedStatus));
+  }, [sex, derivedStatus]);
   const inputRef = useRef<HTMLInputElement>(null);
   const priorInputRef = useRef<HTMLInputElement>(null);
 
@@ -597,6 +634,97 @@ export default function AnalysisPage() {
             </p>
           </div>
         </div>
+
+        {/* LMP / cycle day -> auto-selects the phase below — female only */}
+        {sex === "female" && (
+          <div className="mt-4">
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <div className="flex-1">
+                <label
+                  htmlFor="analysis-lmp"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: NAVY }}
+                >
+                  Last period start date (LMP){" "}
+                  <span className="font-normal opacity-70">(optional)</span>
+                </label>
+                <input
+                  id="analysis-lmp"
+                  type="date"
+                  value={lmpDate}
+                  onChange={(e) => setLmpDate(e.target.value)}
+                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2"
+                  style={{ borderColor: TEAL }}
+                />
+                <p className="mt-1 text-xs opacity-70">
+                  Counted against the Patient Date above to find the cycle day at
+                  the draw. Stays on this page; never sent.
+                </p>
+              </div>
+              <div className="flex-1">
+                <label
+                  htmlFor="analysis-cycle-day"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: NAVY }}
+                >
+                  Cycle day at draw{" "}
+                  <span className="font-normal opacity-70">(optional)</span>
+                </label>
+                <input
+                  id="analysis-cycle-day"
+                  type="number"
+                  min={1}
+                  max={35}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder="e.g. 18"
+                  value={cycleDayInput}
+                  onChange={(e) => setCycleDayInput(e.target.value)}
+                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2"
+                  style={{ borderColor: TEAL }}
+                />
+                <p className="mt-1 text-xs opacity-70">
+                  If known, this wins over the LMP calculation.
+                </p>
+              </div>
+            </div>
+            {cycleInputsPresent && (
+              <p
+                className="mt-2 text-sm"
+                style={{ color: NAVY }}
+                aria-live="polite"
+              >
+                {derivedStatus !== null && cycleDay !== null ? (
+                  NON_CYCLING_STATUSES.has(hormoneStatus) ? (
+                    <>
+                      Cycle day {cycleDay} &rarr; {hormoneStatusLabel(derivedStatus)} — not
+                      applied because &ldquo;{hormoneStatusLabel(parseHormoneStatus(hormoneStatus))}&rdquo;
+                      is selected below.
+                    </>
+                  ) : (
+                    <>
+                      Cycle day {cycleDay} &rarr; {hormoneStatusLabel(derivedStatus)}
+                    </>
+                  )
+                ) : cycleDay !== null ? (
+                  <>
+                    Cycle day {cycleDay} is outside the 1&ndash;35 window the phases
+                    cover, so the phase below was left as is. Choose it manually.
+                  </>
+                ) : typedCycleDay !== null ? (
+                  <>Enter a whole cycle day between 1 and 35.</>
+                ) : !patientDate ? (
+                  <>Enter the Patient Date (draw date) to count the cycle day from the LMP.</>
+                ) : (
+                  <>
+                    The LMP is after the Patient Date, so no cycle day could be counted.
+                    Check the dates or choose the phase manually.
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Cycle phase / menopausal status — female only */}
         {sex === "female" && (

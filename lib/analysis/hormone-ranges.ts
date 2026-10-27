@@ -74,6 +74,51 @@ export function hormoneStatusLabel(status: HormoneStatus): string {
   return STATUS_LABELS.get(status) ?? STATUS_LABELS.get(DEFAULT_HORMONE_STATUS)!;
 }
 
+// ----- Deriving the status from a cycle day / LMP (form helper) -----
+
+/**
+ * Cycle day -> cycling status, using the day windows printed on the form's
+ * dropdown labels. Day 11 is deliberately mid-follicular (pre-surge), and
+ * 21-35 is mid-luteal so a normal luteal length past day 28 still resolves.
+ * Returns null for anything outside 1-35 (or non-finite) so the caller keeps
+ * whatever the practitioner selected manually.
+ */
+export function cycleDayToStatus(cycleDay: number): HormoneStatus | null {
+  if (!Number.isFinite(cycleDay)) return null;
+  const d = Math.floor(cycleDay);
+  if (d >= 1 && d <= 5) return "early_follicular";
+  if (d >= 6 && d <= 11) return "mid_follicular";
+  if (d >= 12 && d <= 15) return "ovulatory";
+  if (d >= 16 && d <= 20) return "luteal";
+  if (d >= 21 && d <= 35) return "mid_luteal";
+  return null;
+}
+
+/** "YYYY-MM-DD" (the browser date input's value) -> UTC midnight ms, else null. */
+function isoDateToUtcMs(iso: string | null | undefined): number | null {
+  if (typeof iso !== "string") return null;
+  const m = iso.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const ms = Date.UTC(y, mo - 1, d);
+  // Reject roll-overs such as 2026-02-30.
+  const back = new Date(ms);
+  if (back.getUTCFullYear() !== y || back.getUTCMonth() !== mo - 1 || back.getUTCDate() !== d) return null;
+  return ms;
+}
+
+/**
+ * Cycle day at the draw: whole days from the last menstrual period (LMP) to
+ * the draw date, plus one (the LMP day itself is day 1). Null when either date
+ * is missing or unparseable, or the draw precedes the LMP.
+ */
+export function computeCycleDay(lmpISO: string, drawISO: string): number | null {
+  const lmp = isoDateToUtcMs(lmpISO);
+  const draw = isoDateToUtcMs(drawISO);
+  if (lmp === null || draw === null || draw < lmp) return null;
+  return Math.floor((draw - lmp) / 86_400_000) + 1;
+}
+
 /** Statuses that name a specific point in the cycle (or past it). These are the
  *  only statuses under which a phase-dependent range is applied. */
 const SPECIFIC_PHASES = new Set<HormoneStatus>([
