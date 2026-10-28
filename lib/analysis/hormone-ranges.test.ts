@@ -26,7 +26,11 @@ import {
   applyHormoneOverlay,
   computeCycleDay,
   cycleDayToStatus,
+  cyclePhaseWindows,
+  estimatedOvulationDay,
   formatOptimalWindow,
+  phaseWindowLabel,
+  resolveCycleLength,
   hormoneOverlayOf,
   hormoneStatusLabel,
   parseHormoneStatus,
@@ -463,29 +467,35 @@ ok(formatOptimalWindow({ min: null, max: 0.2 }) === "≤ 0.2", "<= 0.2");
   ok(!buildInitialAnalysisPrompt(p).includes("Cycle phase"), "male prompt: no hormone context");
 }
 
-// ----- 17. cycleDayToStatus (boundary days + invalid) -----
+// ----- 17. cycleDayToStatus: Melissa's confirmed 28-day table (every day) -----
 
 {
-  const expect: Array<[number, HormoneStatus]> = [
-    [1, "early_follicular"],
-    [5, "early_follicular"],
-    [6, "mid_follicular"],
-    [11, "mid_follicular"],
-    [12, "ovulatory"],
-    [15, "ovulatory"],
-    [16, "luteal"],
-    [20, "luteal"],
-    [21, "mid_luteal"],
-    [35, "mid_luteal"],
-  ];
-  for (const [day, status] of expect) {
-    ok(cycleDayToStatus(day) === status, `cycle day ${day} -> ${status}`);
+  const table28: Record<number, HormoneStatus> = {};
+  for (let d = 1; d <= 5; d++) table28[d] = "early_follicular";
+  for (let d = 6; d <= 11; d++) table28[d] = "mid_follicular";
+  for (let d = 12; d <= 15; d++) table28[d] = "ovulatory";
+  for (let d = 16; d <= 20; d++) table28[d] = "luteal";
+  for (let d = 21; d <= 23; d++) table28[d] = "mid_luteal";
+  for (let d = 24; d <= 28; d++) table28[d] = "luteal";
+  for (let d = 1; d <= 28; d++) {
+    ok(cycleDayToStatus(d) === table28[d], `28-day: day ${d} -> ${table28[d]} (default length)`);
+    ok(cycleDayToStatus(d, 28) === table28[d], `28-day: day ${d} -> ${table28[d]} (explicit length)`);
   }
-  for (const bad of [0, -3, 36, 40, Number.NaN, Number.POSITIVE_INFINITY]) {
+  ok(cycleDayToStatus(11) === "mid_follicular", "day 11 is mid-follicular (pre-surge), not ovulatory");
+  ok(cycleDayToStatus(18) === "luteal", "day 18 -> luteal");
+  ok(cycleDayToStatus(28) === "luteal", "day 28 -> luteal (late), no longer mid-luteal");
+  // A cycle running up to two days long still reads as late luteal.
+  ok(cycleDayToStatus(29) === "luteal" && cycleDayToStatus(30) === "luteal", "days 29-30 -> luteal (running long)");
+  ok(cycleDayToStatus(18.9) === "luteal", "fractional day floors");
+  for (const bad of [0, -3, 31, 35, 40, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     ok(cycleDayToStatus(bad) === null, `cycle day ${bad} -> null`);
   }
-  ok(cycleDayToStatus(18) === "luteal", "day 18 -> luteal");
-  ok(cycleDayToStatus(28) === "mid_luteal", "day 28 -> mid-luteal");
+  ok(estimatedOvulationDay() === 14 && estimatedOvulationDay(28) === 14, "28-day ovulation ~day 14");
+  const w28 = cyclePhaseWindows(28).map((w) => `${w.status}:${w.start}-${w.end}`).join(" ");
+  ok(
+    w28 === "early_follicular:1-5 mid_follicular:6-11 ovulatory:12-15 luteal:16-20 mid_luteal:21-23 luteal:24-28",
+    `28-day windows (${w28})`,
+  );
 }
 
 // ----- 18. computeCycleDay -----
@@ -504,6 +514,193 @@ ok(formatOptimalWindow({ min: null, max: 0.2 }) === "≤ 0.2", "<= 0.2");
   ok(day !== null && cycleDayToStatus(day) === "luteal", "LMP path resolves to luteal");
   const late = computeCycleDay("2026-01-01", "2026-03-18");
   ok(late !== null && cycleDayToStatus(late) === null, "LMP too long ago -> null (manual selection kept)");
+}
+
+// ----- 19. Variable cycle lengths (ovulation = length - 14) -----
+
+{
+  // 24 days: O = 10. 1-5 | 6-7 | 8-11 | 12-16 | 17-19 | 20-24
+  ok(estimatedOvulationDay(24) === 10, "24-day ovulation ~day 10");
+  ok(cycleDayToStatus(7, 24) === "mid_follicular", "24-day: day 7 -> mid-follicular");
+  ok(cycleDayToStatus(8, 24) === "ovulatory", "24-day: day 8 -> ovulatory");
+  ok(cycleDayToStatus(11, 24) === "ovulatory", "24-day: day 11 -> ovulatory (would be mid-follicular at 28)");
+  ok(cycleDayToStatus(12, 24) === "luteal", "24-day: day 12 -> luteal");
+  ok(cycleDayToStatus(17, 24) === "mid_luteal", "24-day: day 17 -> mid-luteal");
+  ok(cycleDayToStatus(20, 24) === "luteal", "24-day: day 20 -> luteal (late)");
+  ok(cycleDayToStatus(24, 24) === "luteal", "24-day: day 24 -> luteal");
+  ok(cycleDayToStatus(26, 24) === "luteal", "24-day: day 26 -> luteal (two days over)");
+  ok(cycleDayToStatus(27, 24) === null, "24-day: day 27 -> null");
+
+  // 32 days: O = 18. 1-5 | 6-15 | 16-19 | 20-24 | 25-27 | 28-32
+  ok(estimatedOvulationDay(32) === 18, "32-day ovulation ~day 18");
+  ok(cycleDayToStatus(15, 32) === "mid_follicular", "32-day: day 15 -> mid-follicular (would be ovulatory at 28)");
+  ok(cycleDayToStatus(16, 32) === "ovulatory", "32-day: day 16 -> ovulatory");
+  ok(cycleDayToStatus(19, 32) === "ovulatory", "32-day: day 19 -> ovulatory");
+  ok(cycleDayToStatus(20, 32) === "luteal", "32-day: day 20 -> luteal");
+  ok(cycleDayToStatus(22, 32) === "luteal", "32-day: day 22 -> luteal (would be mid-luteal at 28)");
+  ok(cycleDayToStatus(25, 32) === "mid_luteal", "32-day: day 25 -> mid-luteal");
+  ok(cycleDayToStatus(27, 32) === "mid_luteal", "32-day: day 27 -> mid-luteal");
+  ok(cycleDayToStatus(28, 32) === "luteal", "32-day: day 28 -> luteal (late)");
+  ok(cycleDayToStatus(32, 32) === "luteal", "32-day: day 32 -> luteal");
+  ok(cycleDayToStatus(34, 32) === "luteal", "32-day: day 34 -> luteal (two days over)");
+  ok(cycleDayToStatus(35, 32) === null, "32-day: day 35 -> null");
+
+  // 35 days: O = 21. 1-5 | 6-18 | 19-22 | 23-27 | 28-30 | 31-35
+  ok(estimatedOvulationDay(35) === 21, "35-day ovulation ~day 21");
+  ok(cycleDayToStatus(18, 35) === "mid_follicular", "35-day: day 18 -> mid-follicular");
+  ok(cycleDayToStatus(21, 35) === "ovulatory", "35-day: day 21 -> ovulatory");
+  ok(cycleDayToStatus(23, 35) === "luteal", "35-day: day 23 -> luteal");
+  ok(cycleDayToStatus(29, 35) === "mid_luteal", "35-day: day 29 -> mid-luteal");
+  ok(cycleDayToStatus(35, 35) === "luteal", "35-day: day 35 -> luteal");
+  ok(cycleDayToStatus(37, 35) === "luteal" && cycleDayToStatus(38, 35) === null, "35-day: 37 luteal, 38 null");
+
+  // Every length in the supported band assigns each day 1..L exactly once,
+  // in order, with early follicular always 1-5 and the last window ending at L.
+  for (let L = 21; L <= 45; L++) {
+    const ws = cyclePhaseWindows(L);
+    let contiguous = ws[0].start === 1 && ws[ws.length - 1].end === L;
+    for (let i = 1; i < ws.length; i++) contiguous = contiguous && ws[i].start === ws[i - 1].end + 1;
+    ok(contiguous, `${L}-day windows are contiguous and cover 1..${L}`);
+    ok(ws[0].status === "early_follicular" && ws[0].end === 5, `${L}-day: early follicular is 1-5`);
+    ok(ws.every((w) => w.end >= w.start), `${L}-day: no empty window emitted`);
+  }
+}
+
+// ----- 20. Short-cycle clamping (21 days squeezes mid-follicular out) -----
+
+{
+  // 21 days: O = 7. Mid-follicular would be 6..4 (empty) -> dropped; the
+  // ovulatory window (5..8) is clamped to start after early follicular.
+  const w21 = cyclePhaseWindows(21).map((w) => `${w.status}:${w.start}-${w.end}`).join(" ");
+  ok(
+    w21 === "early_follicular:1-5 ovulatory:6-8 luteal:9-13 mid_luteal:14-16 luteal:17-21",
+    `21-day windows (${w21})`,
+  );
+  ok(cycleDayToStatus(5, 21) === "early_follicular", "21-day: day 5 -> early follicular");
+  ok(cycleDayToStatus(6, 21) === "ovulatory", "21-day: day 6 -> ovulatory (no mid-follicular)");
+  ok(!cyclePhaseWindows(21).some((w) => w.status === "mid_follicular"), "21-day: no mid-follicular window");
+  ok(cycleDayToStatus(9, 21) === "luteal", "21-day: day 9 -> luteal");
+  ok(cycleDayToStatus(14, 21) === "mid_luteal", "21-day: day 14 -> mid-luteal");
+  ok(cycleDayToStatus(21, 21) === "luteal", "21-day: day 21 -> luteal");
+  ok(cycleDayToStatus(23, 21) === "luteal" && cycleDayToStatus(24, 21) === null, "21-day: 23 luteal, 24 null");
+  ok(phaseWindowLabel("mid_follicular", 21) === null, "21-day: mid-follicular has no day span");
+}
+
+// ----- 21. Invalid inputs + cycle-length fallback to 28 -----
+
+{
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    ok(cycleDayToStatus(18, bad) === "luteal", `non-finite cycle length ${bad} reads as 28 (day 18 -> luteal)`);
+    ok(cycleDayToStatus(bad, 32) === null, `non-finite cycle day ${bad} -> null`);
+    ok(resolveCycleLength(bad).length === 28 && !resolveCycleLength(bad).fellBack, `resolveCycleLength(${bad}) -> 28, not a fallback`);
+  }
+  // Outside 21-45 -> 28 with the flag set.
+  for (const out of [20, 46, 0, -5, 100, 20.9, "20", "46"]) {
+    const r = resolveCycleLength(out);
+    ok(r.length === 28 && r.fellBack, `cycle length ${JSON.stringify(out)} falls back to 28 (flagged)`);
+    ok(cycleDayToStatus(22, out as number) === "mid_luteal", `cycle length ${JSON.stringify(out)}: day 22 -> mid-luteal (28-day table)`);
+  }
+  // Edges of the band are honoured, not clamped away.
+  ok(resolveCycleLength(21).length === 21 && !resolveCycleLength(21).fellBack, "21 is accepted");
+  ok(resolveCycleLength(45).length === 45 && !resolveCycleLength(45).fellBack, "45 is accepted");
+  ok(cycleDayToStatus(29, 45) === "ovulatory", "45-day: day 29 -> ovulatory");
+  ok(cycleDayToStatus(47, 45) === "luteal" && cycleDayToStatus(48, 45) === null, "45-day: 47 luteal, 48 null");
+  // Blank / missing / non-numeric = "not provided" = 28, NOT a fallback.
+  for (const blank of ["", "   ", null, undefined, "abc"]) {
+    const r = resolveCycleLength(blank);
+    ok(r.length === 28 && !r.fellBack, `cycle length ${JSON.stringify(blank)} -> 28 (not provided)`);
+  }
+  ok(resolveCycleLength("32").length === 32, "string '32' parses");
+  ok(resolveCycleLength(32.7).length === 32, "fractional length floors");
+  ok(cycleDayToStatus(18, 32.7) === "ovulatory", "fractional length 32.7 behaves as 32 (day 18 -> ovulatory)");
+}
+
+// ----- 22. phaseWindowLabel (dynamic day spans for the form line) -----
+
+{
+  ok(phaseWindowLabel("early_follicular", 28) === "day 1-5", "28: early follicular label");
+  ok(phaseWindowLabel("mid_follicular", 28) === "day 6-11", "28: mid-follicular label");
+  ok(phaseWindowLabel("ovulatory", 28) === "day 12-15", "28: ovulatory label");
+  ok(phaseWindowLabel("mid_luteal", 28) === "day 21-23", "28: mid-luteal label");
+  ok(phaseWindowLabel("luteal", 28) === "day 16-20 or 24-28", "28: luteal lists both spans without a day");
+  ok(phaseWindowLabel("luteal", 28, 18) === "day 16-20", "28: luteal + day 18 -> first span");
+  ok(phaseWindowLabel("luteal", 28, 26) === "day 24-28", "28: luteal + day 26 -> late span");
+  ok(phaseWindowLabel("luteal", 28, 30) === "day 24-28", "28: luteal + day 30 (running long) -> late span");
+  ok(phaseWindowLabel("luteal", 32, 22) === "day 20-24", "32: luteal + day 22 -> day 20-24");
+  ok(phaseWindowLabel("ovulatory", 32) === "day 16-19", "32: ovulatory label");
+  ok(phaseWindowLabel("mid_follicular", 24) === "day 6-7", "24: mid-follicular label");
+  ok(phaseWindowLabel("ovulatory", 21) === "day 6-8", "21: ovulatory label");
+  ok(phaseWindowLabel("luteal") === "day 16-20 or 24-28", "default length is 28");
+  ok(phaseWindowLabel("ovulatory", 50) === "day 12-15", "out-of-band length labels as 28");
+  for (const s of ["not_sure", "postmenopausal", "postmenopausal_hrt", "birth_control"] as HormoneStatus[]) {
+    ok(phaseWindowLabel(s, 28) === null, `${s} has no day span`);
+  }
+  // The label agrees with cycleDayToStatus for every day of every length.
+  let agree = true;
+  for (let L = 21; L <= 45; L++) {
+    for (let d = 1; d <= L; d++) {
+      const st = cycleDayToStatus(d, L);
+      const label = st ? phaseWindowLabel(st, L, d) : null;
+      const m = label?.match(/^day (\d+)(?:-(\d+))?$/);
+      if (!m) { agree = false; continue; }
+      const lo = Number(m[1]);
+      const hi = m[2] ? Number(m[2]) : lo;
+      if (d < lo || d > hi) agree = false;
+    }
+  }
+  ok(agree, "phaseWindowLabel span contains the day for every day of every length 21-45");
+}
+
+// ----- 23. Overlay: patient-facing cycle-timing note -----
+
+{
+  const noteRe = /estimated (\d+)-day cycle \(ovulation ~day (\d+)\)/;
+  const std = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "luteal" });
+  ok(!std.summary.notes.some((n) => noteRe.test(n)), "no cycle length -> no timing note");
+  const blank = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "luteal", cycleLength: "", cycleDay: "18" });
+  ok(!blank.summary.notes.some((n) => noteRe.test(n)), "blank cycle length -> no timing note");
+  const twentyEight = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "luteal", cycleLength: "28", cycleDay: "18" });
+  ok(!twentyEight.summary.notes.some((n) => noteRe.test(n)), "28-day cycle -> no timing note");
+  ok(
+    twentyEight.summary.applied.length === std.summary.applied.length &&
+      twentyEight.markers.every((m, i) => m.flagStatus === std.markers[i].flagStatus && m.flagSeverity === std.markers[i].flagSeverity),
+    "cycle inputs never change the per-marker flags",
+  );
+
+  const long = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "luteal", cycleLength: "32", cycleDay: "22" });
+  const note = long.summary.notes.find((n) => noteRe.test(n));
+  ok(!!note, "32-day cycle -> timing note present");
+  ok(!!note && /estimated 32-day cycle \(ovulation ~day 18\)/.test(note), "note names 32 days and ovulation ~day 18");
+  ok(!!note && note.includes("drawn on cycle day 22"), "note quotes the cycle day");
+  ok(!!note && note.includes("adjusted from the standard 28-day timing"), "note says it was adjusted from 28");
+  ok(!!note && note.includes("Confirm the sample was drawn on the intended cycle day"), "note asks the patient to confirm the draw day");
+  ok(long.summary.notes[long.summary.notes.length - 1] === note, "timing note is the last note (after the range notes)");
+  ok(
+    long.markers.every((m, i) => m.flagStatus === std.markers[i].flagStatus && m.flagSeverity === std.markers[i].flagSeverity),
+    "32-day cycle: per-marker flags identical to the 28-day run",
+  );
+  const noDay = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "luteal", cycleLength: 24 });
+  const n2 = noDay.summary.notes.find((n) => noteRe.test(n));
+  ok(!!n2 && /24-day cycle \(ovulation ~day 10\)/.test(n2) && !n2.includes("from a sample drawn on cycle day"), "numeric length, no day -> note without the draw-day clause");
+
+  // Gated: only a cycling phase, only when something was applied, female only.
+  const notSureLong = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "not_sure", cycleLength: "32", cycleDay: "22" });
+  ok(!notSureLong.summary.notes.some((n) => noteRe.test(n)), "not sure + 32 -> no timing note");
+  const postLong = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "postmenopausal", cycleLength: "32" });
+  ok(!postLong.summary.notes.some((n) => noteRe.test(n)), "postmenopausal + 32 -> no timing note");
+  const bcLong = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "birth_control", cycleLength: "32" });
+  ok(!bcLong.summary.notes.some((n) => noteRe.test(n)), "birth control + 32 -> nothing applied, no timing note");
+  const maleLong = applyHormoneOverlay(sydneyEngine, { sex: "male", status: "luteal", cycleLength: "32", cycleDay: "22" });
+  ok(maleLong.markers === sydneyEngine && maleLong.summary.notes.length === 0, "male + cycle inputs -> overlay still a no-op");
+  const fallbackLong = applyHormoneOverlay(sydneyEngine, { sex: "female", status: "luteal", cycleLength: "50", cycleDay: "22" });
+  ok(!fallbackLong.summary.notes.some((n) => noteRe.test(n)), "out-of-band length (50) reads as 28 -> no timing note");
+  const noHormones = applyHormoneOverlay(flagMarkers([matched("Glucose", 90, "mg/dL", "65-99")]), {
+    sex: "female",
+    status: "luteal",
+    cycleLength: "32",
+    cycleDay: "22",
+  });
+  ok(noHormones.summary.notes.length === 0, "panel without hormones -> no notes at all, timing note included");
 }
 
 // ----- Report -----

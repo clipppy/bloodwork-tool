@@ -76,22 +76,150 @@ export function hormoneStatusLabel(status: HormoneStatus): string {
 
 // ----- Deriving the status from a cycle day / LMP (form helper) -----
 
+/** The textbook cycle every window in Melissa's table was written against. */
+export const DEFAULT_CYCLE_LENGTH = 28;
+/** Average cycle lengths the ovulation estimate is trusted for. Outside this
+ *  band the caller falls back to 28 days and is told so (see
+ *  resolveCycleLength). */
+export const MIN_CYCLE_LENGTH = 21;
+export const MAX_CYCLE_LENGTH = 45;
+/** Luteal length held constant: ovulation is estimated at cycleLength - 14. */
+const LUTEAL_LENGTH = 14;
+
+export interface ResolvedCycleLength {
+  /** The length the phase windows are computed from (always 21-45). */
+  length: number;
+  /** True when the supplied length was a number outside 21-45 and 28 was used
+   *  instead. Blank / missing input is NOT a fallback: it simply means 28. */
+  fellBack: boolean;
+}
+
 /**
- * Cycle day -> cycling status, using the day windows printed on the form's
- * dropdown labels. Day 11 is deliberately mid-follicular (pre-surge), and
- * 21-35 is mid-luteal so a normal luteal length past day 28 still resolves.
- * Returns null for anything outside 1-35 (or non-finite) so the caller keeps
- * whatever the practitioner selected manually.
+ * Form / request value -> usable cycle length. Blank, null, undefined or
+ * non-numeric input means "not provided" and reads as the standard 28-day
+ * cycle. A finite number outside 21-45 also reads as 28, with `fellBack` set
+ * so the caller can tell the practitioner the typed length was not used.
  */
-export function cycleDayToStatus(cycleDay: number): HormoneStatus | null {
+export function resolveCycleLength(raw: unknown): ResolvedCycleLength {
+  let n: number;
+  if (typeof raw === "number") n = raw;
+  else if (typeof raw === "string" && raw.trim() !== "") n = Number(raw.trim());
+  else return { length: DEFAULT_CYCLE_LENGTH, fellBack: false };
+  if (!Number.isFinite(n)) return { length: DEFAULT_CYCLE_LENGTH, fellBack: false };
+  const whole = Math.floor(n);
+  if (whole < MIN_CYCLE_LENGTH || whole > MAX_CYCLE_LENGTH) {
+    return { length: DEFAULT_CYCLE_LENGTH, fellBack: true };
+  }
+  return { length: whole, fellBack: false };
+}
+
+/** Estimated ovulation day for a cycle of this length (luteal phase held at
+ *  14 days). The length is resolved first, so an out-of-band value gives the
+ *  28-day answer (day 14). */
+export function estimatedOvulationDay(cycleLength: number = DEFAULT_CYCLE_LENGTH): number {
+  return resolveCycleLength(cycleLength).length - LUTEAL_LENGTH;
+}
+
+export type CyclingPhase =
+  | "early_follicular"
+  | "mid_follicular"
+  | "ovulatory"
+  | "luteal"
+  | "mid_luteal";
+
+export interface PhaseWindow {
+  status: CyclingPhase;
+  /** First and last cycle day (inclusive) of this window. */
+  start: number;
+  end: number;
+}
+
+/**
+ * The day windows for a cycle of the given length, anchored to the estimated
+ * ovulation day O = cycleLength - 14 (the follicular phase stretches or
+ * shrinks; the luteal phase stays ~14 days):
+ *
+ *   1 .. 5            early follicular
+ *   6 .. O-3          mid-follicular
+ *   O-2 .. O+1        ovulatory
+ *   O+2 .. O+6        luteal
+ *   O+7 .. O+9        mid-luteal
+ *   O+10 .. length    luteal (late)
+ *
+ * Windows are evaluated in order and clamped so none overlaps the one before
+ * it; a window whose span collapses (short cycles squeeze mid-follicular out)
+ * is dropped. For 28 days this reproduces Melissa's confirmed table: 1-5,
+ * 6-11, 12-15, 16-20, 21-23, 24-28.
+ */
+export function cyclePhaseWindows(cycleLength: number = DEFAULT_CYCLE_LENGTH): PhaseWindow[] {
+  const L = resolveCycleLength(cycleLength).length;
+  const O = L - LUTEAL_LENGTH;
+  const nominal: Array<[CyclingPhase, number, number]> = [
+    ["early_follicular", 1, 5],
+    ["mid_follicular", 6, O - 3],
+    ["ovulatory", O - 2, O + 1],
+    ["luteal", O + 2, O + 6],
+    ["mid_luteal", O + 7, O + 9],
+    ["luteal", O + 10, L],
+  ];
+  const out: PhaseWindow[] = [];
+  let next = 1; // first day not yet assigned
+  for (const [status, s, e] of nominal) {
+    const start = Math.max(s, next);
+    const end = Math.min(e, L);
+    if (end < start) continue;
+    out.push({ status, start, end });
+    next = end + 1;
+  }
+  return out;
+}
+
+/**
+ * Cycle day -> cycling status for a cycle of the given length (28 when
+ * omitted). Days up to two past the expected length still count as late
+ * luteal (a cycle running slightly long). Returns null for day < 1, day >
+ * length + 2, or non-finite input, so the caller keeps whatever the
+ * practitioner selected manually. A non-finite or out-of-band cycle length
+ * reads as 28 (see resolveCycleLength for the flag).
+ */
+export function cycleDayToStatus(
+  cycleDay: number,
+  cycleLength: number = DEFAULT_CYCLE_LENGTH,
+): HormoneStatus | null {
   if (!Number.isFinite(cycleDay)) return null;
+  const L = resolveCycleLength(cycleLength).length;
   const d = Math.floor(cycleDay);
-  if (d >= 1 && d <= 5) return "early_follicular";
-  if (d >= 6 && d <= 11) return "mid_follicular";
-  if (d >= 12 && d <= 15) return "ovulatory";
-  if (d >= 16 && d <= 20) return "luteal";
-  if (d >= 21 && d <= 35) return "mid_luteal";
-  return null;
+  if (d < 1 || d > L + 2) return null;
+  for (const w of cyclePhaseWindows(L)) {
+    if (d >= w.start && d <= w.end) return w.status;
+  }
+  // Only days L+1 .. L+2 reach here: the cycle is running long, still luteal.
+  return "luteal";
+}
+
+/**
+ * The day span a status occupies in a cycle of this length, for the form's
+ * confirmation line ("day 16-20"). Luteal has two spans (either side of
+ * mid-luteal); pass the cycle day to get the span that contains it, otherwise
+ * both are listed ("day 16-20 or 24-28"). Null for statuses that are not a
+ * point in the cycle (postmenopausal, HRT, birth control, not sure).
+ */
+export function phaseWindowLabel(
+  status: HormoneStatus,
+  cycleLength: number = DEFAULT_CYCLE_LENGTH,
+  cycleDay?: number,
+): string | null {
+  const windows = cyclePhaseWindows(cycleLength).filter((w) => w.status === status);
+  if (!windows.length) return null;
+  const d = cycleDay !== undefined && Number.isFinite(cycleDay) ? Math.floor(cycleDay) : null;
+  const span = (w: PhaseWindow) => (w.start === w.end ? `${w.start}` : `${w.start}-${w.end}`);
+  if (d !== null) {
+    const hit = windows.find((w) => d >= w.start && d <= w.end);
+    if (hit) return `day ${span(hit)}`;
+    // A day past the cycle length (running long) belongs with the last span.
+    if (d > resolveCycleLength(cycleLength).length) return `day ${span(windows[windows.length - 1])}`;
+  }
+  return `day ${windows.map(span).join(" or ")}`;
 }
 
 /** "YYYY-MM-DD" (the browser date input's value) -> UTC midnight ms, else null. */
@@ -128,6 +256,16 @@ const SPECIFIC_PHASES = new Set<HormoneStatus>([
   "luteal",
   "mid_luteal",
   "postmenopausal",
+]);
+
+/** The statuses that are a point in a menstrual cycle, i.e. the ones a cycle
+ *  day / cycle length can derive. */
+const CYCLING_PHASES = new Set<HormoneStatus>([
+  "early_follicular",
+  "mid_follicular",
+  "ovulatory",
+  "luteal",
+  "mid_luteal",
 ]);
 
 /** Melissa's caveat: patients on hormonal contraception or HRT do not fit the
@@ -415,6 +553,12 @@ export type OverlaySex = "male" | "female" | null;
 export interface HormoneOverlayOptions {
   sex: OverlaySex;
   status: HormoneStatus;
+  /** Average cycle length the phase was derived from (form input). Blank or
+   *  missing reads as 28; only a length other than 28 adds the timing note. */
+  cycleLength?: number | string | null;
+  /** The cycle day at the draw, when the form resolved one; quoted in the
+   *  timing note so the patient can check it. */
+  cycleDay?: number | string | null;
 }
 
 export interface HormoneOverlaySummary {
@@ -688,6 +832,20 @@ export function applyHormoneOverlay(
   if (unitMismatch.length) {
     notes.push(
       `Functional optimal range not applied to ${joinNames(unitMismatch)}: the units differ.`,
+    );
+  }
+  // Cycle-length-aware timing: when the phase came from a cycle that is not
+  // the textbook 28 days, say so on the report so the patient can check the
+  // draw landed on the intended day. Only meaningful when a cycling phase was
+  // in force and at least one hormone was judged against it.
+  const cycle = resolveCycleLength(opts.cycleLength ?? null);
+  if (applied.length && CYCLING_PHASES.has(status) && cycle.length !== DEFAULT_CYCLE_LENGTH) {
+    const dayRaw = opts.cycleDay ?? null;
+    const dayNum =
+      typeof dayRaw === "number" ? dayRaw : typeof dayRaw === "string" && dayRaw.trim() ? Number(dayRaw) : NaN;
+    const drawnOn = Number.isFinite(dayNum) ? ` from a sample drawn on cycle day ${Math.floor(dayNum)}` : "";
+    notes.push(
+      `Hormone phase ranges were applied for an estimated ${cycle.length}-day cycle (ovulation ~day ${estimatedOvulationDay(cycle.length)})${drawnOn}, adjusted from the standard ${DEFAULT_CYCLE_LENGTH}-day timing. Confirm the sample was drawn on the intended cycle day.`,
     );
   }
 

@@ -145,6 +145,11 @@ export async function POST(req: Request): Promise<Response> {
   // Cycle phase / menopausal status. Clinical context, not an identifier;
   // unrecognised or missing values read as "Not sure" (no phase ranges).
   const hormoneStatus = parseHormoneStatus(form.get("hormoneStatus"));
+  // Cycle timing the phase was derived from (female only; blank otherwise).
+  // Clinical context for the overlay's patient-facing timing note; the
+  // overlay itself validates both (blank / out-of-band length reads as 28).
+  const cycleLength = (form.get("cycleLength") as string | null)?.trim() || null;
+  const cycleDay = (form.get("cycleDay") as string | null)?.trim() || null;
   const intake = (form.get("intake") as string | null) || "";
   const skipNarrative = (form.get("skipNarrative") as string | null) === "1";
   const mode = (form.get("mode") as string | null) === "reeval" ? "reeval" : "initial";
@@ -218,6 +223,8 @@ export async function POST(req: Request): Promise<Response> {
     const overlay = applyHormoneOverlay(engineFlagged, {
       sex: flaggingSex,
       status: hormoneStatus,
+      cycleLength,
+      cycleDay,
     });
     const flagged = overlay.markers;
     analysis = buildDeterministicAnalysis(flagged, {

@@ -17,11 +17,16 @@
 import { useEffect, useRef, useState } from "react";
 import ToolNav from "../tool-nav";
 import {
+  DEFAULT_CYCLE_LENGTH,
   DEFAULT_HORMONE_STATUS,
   HORMONE_STATUS_OPTIONS,
+  MAX_CYCLE_LENGTH,
+  MIN_CYCLE_LENGTH,
   computeCycleDay,
   cycleDayToStatus,
   hormoneStatusLabel,
+  phaseWindowLabel,
+  resolveCycleLength,
   parseHormoneStatus,
 } from "../../lib/analysis/hormone-ranges";
 
@@ -84,6 +89,7 @@ export default function AnalysisPage() {
   const [hormoneStatus, setHormoneStatus] = useState<string>(DEFAULT_HORMONE_STATUS);
   const [lmpDate, setLmpDate] = useState("");
   const [cycleDayInput, setCycleDayInput] = useState("");
+  const [cycleLengthInput, setCycleLengthInput] = useState("");
   const [intake, setIntake] = useState("");
   const [gen, setGen] = useState<GenStatus>({ kind: "idle" });
   const [elapsed, setElapsed] = useState(0);
@@ -101,7 +107,11 @@ export default function AnalysisPage() {
         ? computeCycleDay(lmpDate, patientDate)
         : null;
   const cycleInputsPresent = typedCycleDay !== null || lmpDate !== "";
-  const derivedStatus = cycleDay === null ? null : cycleDayToStatus(cycleDay);
+  // Average cycle length: blank means the standard 28 days; a typed length
+  // outside 21-45 also falls back to 28 and is called out on the line below.
+  const { length: cycleLength, fellBack: cycleLengthFellBack } = resolveCycleLength(cycleLengthInput);
+  const cycleIsStandard = cycleLength === DEFAULT_CYCLE_LENGTH;
+  const derivedStatus = cycleDay === null ? null : cycleDayToStatus(cycleDay, cycleLength);
 
   // Auto-select the phase from the cycle inputs. A deliberately chosen
   // non-cycling status is never overridden, and because this only runs when
@@ -221,6 +231,10 @@ export default function AnalysisPage() {
       form.append("sex", sex);
       // Only meaningful for a female patient; the server ignores it otherwise.
       form.append("hormoneStatus", sex === "female" ? hormoneStatus : "");
+      // Cycle timing the phase was derived from, as clinical context for the
+      // report's timing note. Resolved values: blank length = 28 days.
+      form.append("cycleLength", sex === "female" ? String(cycleLength) : "");
+      form.append("cycleDay", sex === "female" && cycleDay !== null ? String(cycleDay) : "");
       form.append("intake", intake);
       form.append("mode", mode);
       if (mode === "reeval" && priorFile) {
@@ -674,7 +688,7 @@ export default function AnalysisPage() {
                   id="analysis-cycle-day"
                   type="number"
                   min={1}
-                  max={35}
+                  max={MAX_CYCLE_LENGTH + 2}
                   step={1}
                   inputMode="numeric"
                   placeholder="e.g. 18"
@@ -687,6 +701,33 @@ export default function AnalysisPage() {
                   If known, this wins over the LMP calculation.
                 </p>
               </div>
+              <div className="flex-1">
+                <label
+                  htmlFor="analysis-cycle-length"
+                  className="mb-1 block text-sm font-medium"
+                  style={{ color: NAVY }}
+                >
+                  Average cycle length (days){" "}
+                  <span className="font-normal opacity-70">(optional)</span>
+                </label>
+                <input
+                  id="analysis-cycle-length"
+                  type="number"
+                  min={MIN_CYCLE_LENGTH}
+                  max={MAX_CYCLE_LENGTH}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder={`e.g. ${DEFAULT_CYCLE_LENGTH}`}
+                  value={cycleLengthInput}
+                  onChange={(e) => setCycleLengthInput(e.target.value)}
+                  className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2"
+                  style={{ borderColor: TEAL }}
+                />
+                <p className="mt-1 text-xs opacity-70">
+                  Blank = standard {DEFAULT_CYCLE_LENGTH} days. Shifts the phase windows
+                  around the estimated ovulation day (cycle length minus 14).
+                </p>
+              </div>
             </div>
             {cycleInputsPresent && (
               <p
@@ -697,22 +738,29 @@ export default function AnalysisPage() {
                 {derivedStatus !== null && cycleDay !== null ? (
                   NON_CYCLING_STATUSES.has(hormoneStatus) ? (
                     <>
-                      Cycle day {cycleDay} &rarr; {hormoneStatusLabel(derivedStatus)} — not
-                      applied because &ldquo;{hormoneStatusLabel(parseHormoneStatus(hormoneStatus))}&rdquo;
-                      is selected below.
+                      Cycle day {cycleDay} of a {cycleLength}-day cycle &rarr;{" "}
+                      {hormoneStatusLabel(derivedStatus)} — not applied because &ldquo;
+                      {hormoneStatusLabel(parseHormoneStatus(hormoneStatus))}&rdquo; is
+                      selected below.
                     </>
                   ) : (
                     <>
-                      Cycle day {cycleDay} &rarr; {hormoneStatusLabel(derivedStatus)}
+                      Cycle day {cycleDay} of a {cycleLength}-day cycle &rarr;{" "}
+                      {hormoneStatusLabel(derivedStatus).replace(/\s*\(.*\)$/, "")} (
+                      {phaseWindowLabel(derivedStatus, cycleLength, cycleDay)})
+                      {cycleIsStandard
+                        ? "."
+                        : `; timing adjusted from the standard ${DEFAULT_CYCLE_LENGTH}-day cycle.`}
                     </>
                   )
                 ) : cycleDay !== null ? (
                   <>
-                    Cycle day {cycleDay} is outside the 1&ndash;35 window the phases
-                    cover, so the phase below was left as is. Choose it manually.
+                    Cycle day {cycleDay} is outside the 1&ndash;{cycleLength + 2} window a{" "}
+                    {cycleLength}-day cycle covers, so the phase below was left as is.
+                    Choose it manually.
                   </>
                 ) : typedCycleDay !== null ? (
-                  <>Enter a whole cycle day between 1 and 35.</>
+                  <>Enter a whole cycle day between 1 and {cycleLength + 2}.</>
                 ) : !patientDate ? (
                   <>Enter the Patient Date (draw date) to count the cycle day from the LMP.</>
                 ) : (
@@ -721,6 +769,12 @@ export default function AnalysisPage() {
                     Check the dates or choose the phase manually.
                   </>
                 )}
+              </p>
+            )}
+            {cycleLengthFellBack && (
+              <p className="mt-1 text-sm" style={{ color: NAVY }} aria-live="polite">
+                Average cycle length must be between {MIN_CYCLE_LENGTH} and {MAX_CYCLE_LENGTH}{" "}
+                days; the standard {DEFAULT_CYCLE_LENGTH}-day timing is being used instead.
               </p>
             )}
           </div>
