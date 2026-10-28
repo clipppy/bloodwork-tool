@@ -13,7 +13,7 @@
  * no prose parsing anywhere in the path.
  */
 
-import type { AnalysisPayload, ReevalPayload } from "./deidentify";
+import type { AnalysisPayload, ReevalPayload, SalivaCortisolPayload } from "./deidentify";
 import { serializePayload } from "./deidentify";
 import type { PriorMarkerFact } from "./deterministic";
 import type { InitialNarrativeJson, ReevalNarrativeJson } from "./schemas";
@@ -49,6 +49,9 @@ export interface AnalysisNarrative {
   rootCause: NarrativeBlock[];
   protocol: NarrativeBlock[];
   patientSummary: NarrativeBlock[];
+  /** Practitioner-facing diurnal cortisol interpretation, one paragraph per
+   *  block. Empty when no saliva cortisol report was supplied. */
+  cortisol: NarrativeBlock[];
 }
 
 /** Joins the symptom tags into the single strip the document renders. */
@@ -211,6 +214,55 @@ export function hormoneContextLines(
   return out;
 }
 
+/**
+ * Salivary cortisol context, shared by both modes. Empty when no saliva report
+ * was read. The facts (each sample against its window, the curve metrics) were
+ * computed in code and sit in the payload's `salivaCortisol` block; these
+ * lines tell the model how to read them in the practitioner's voice.
+ */
+export function cortisolContextLines(block: SalivaCortisolPayload | null | undefined): string[] {
+  if (!block) return [];
+  return [
+    "SALIVARY CORTISOL (4 timed samples, same day) is included in the data as",
+    "`salivaCortisol`. Each sample was compared by the tool against the reference",
+    "window for its time slot (sample order decides the slot; the printed draw time",
+    "is confirmatory, not strict), and the curve metrics were computed by the tool:",
+    `pattern = ${block.curve.pattern}`,
+    `${block.curve.lowAmplitude ? "(low amplitude: the morning-to-night fall is small)" : ""}`,
+    block.curve.morningToNightDropPercent !== null
+      ? `morning-to-night change = ${block.curve.morningToNightDropPercent}% of the morning value.`
+      : "morning-to-night change could not be computed (a sample is missing).",
+    ...block.curve.notes.map((n) => `- ${n}`),
+    "Interpret the curve FUNCTIONALLY, the way this practitioner writes it up:",
+    "whether the morning peak is adequate (and where it sits in its window), how",
+    "the level comes down across the day (slope), any flattening or blunting, and",
+    "what the overall output looks like. Where the blood panel supports it, connect",
+    "the pattern to the rest of the picture (sleep, 'wired but tired', blood sugar,",
+    "thyroid, sex hormones) in plain language; say 'cortisol dysregulation' rather",
+    "than a disease label. Treat the shape as decision support, not a diagnosis.",
+    "Always include these caveats, in your own words: this is a single-day snapshot;",
+    "wake time, sleep aids and the timing of medications or supplements can shift",
+    "the curve; this pattern does not diagnose adrenal insufficiency; and an 8 AM",
+    "serum cortisol, with or without ACTH, is worth ordering only if symptoms",
+    "warrant it. Cite the sample values and windows exactly as given.",
+  ].filter((line) => line !== "");
+}
+
+function cortisolFieldSpec(block: SalivaCortisolPayload | null | undefined): string[] {
+  if (!block) return [];
+  return [
+    "",
+    "- cortisolInterpretation: array of strings, one per short paragraph (two to",
+    "    four), written for the practitioner: the diurnal cortisol reading described",
+    "    above — morning peak adequacy, decline across the day, flattening or",
+    "    blunting, overall output — framed functionally, followed by the standard",
+    "    caveats (single-day snapshot; wake-time / medication / sleep-aid timing are",
+    "    confounders; the pattern does not diagnose adrenal insufficiency; suggest an",
+    "    8 AM serum cortisol +/- ACTH only if symptoms warrant). Do not restate the",
+    "    cortisol table row by row; it is rendered by the tool.",
+  ];
+}
+
 export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
   const hasIntake = !!payload.intake && payload.intake.trim().length > 0;
   const ageSex = [
@@ -221,6 +273,7 @@ export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
   return [
     `Patient context: ${ageSex}.`,
     ...hormoneContextLines(payload.patient.hormoneStatus, payload.hormoneNotes ?? []),
+    ...cortisolContextLines(payload.salivaCortisol),
     "",
     "AUTHORITATIVE MARKER DATA (computed by the tool; treat as ground truth):",
     "```json",
@@ -249,6 +302,7 @@ export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
     hasIntake ? "```" : "",
     "",
     fieldSpec(hasIntake),
+    ...cortisolFieldSpec(payload.salivaCortisol),
   ]
     .filter((line) => line !== "")
     .join("\n");
@@ -268,6 +322,8 @@ export interface ReevalNarrative {
   alreadyImproving: NarrativeBlock[];
   backgroundFindings: NarrativeBlock[];
   patientSummary: NarrativeBlock[];
+  /** See AnalysisNarrative.cortisol. */
+  cortisol: NarrativeBlock[];
 }
 
 export const REEVAL_SYSTEM_PROMPT = [
@@ -301,6 +357,7 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
       ? `Time between the prior panel and this one: ${interval}.`
       : "The interval between the two panels was not provided; do not guess it.",
     ...hormoneContextLines(payload.patient.hormoneStatus, payload.hormoneNotes ?? []),
+    ...cortisolContextLines(payload.salivaCortisol),
     "",
     "CURRENT PANEL (computed by the tool; authoritative):",
     "```json",
@@ -420,6 +477,7 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     "      likelyDrivers:       what is most likely behind the chief concern now, and",
     "                           why it connects to how they feel.",
     "      planInPlainLanguage: what the updated plan does about it.",
+    ...cortisolFieldSpec(payload.salivaCortisol),
     "",
     "Write plain prose inside the fields — no markdown, no bullet characters, no",
     "numbering. The document adds all formatting.",
@@ -571,6 +629,14 @@ function phasesToBlocks(value: unknown, field: string): NarrativeBlock[] {
 const paragraphs = (items: string[]): NarrativeBlock[] =>
   items.map((text) => ({ type: "paragraph" as const, text }));
 
+/** The cortisol interpretation is only requested when a saliva report was
+ *  read, so a missing or empty field is normal, never a parse failure. */
+function cortisolToBlocks(value: unknown): NarrativeBlock[] {
+  return paragraphs(
+    requireNonEmptyStrings(value ?? [], "cortisolInterpretation", { allowEmpty: true }),
+  );
+}
+
 const bullets = (items: string[]): NarrativeBlock[] =>
   items.map((text) => ({ type: "bullet" as const, text }));
 
@@ -593,6 +659,7 @@ export function toAnalysisNarrative(json: InitialNarrativeJson): AnalysisNarrati
     rootCause: patternsToBlocks(json.rootCauseAnalysis, "rootCauseAnalysis", chiefConcern),
     protocol: phasesToBlocks(json.phasedProtocol, "phasedProtocol"),
     patientSummary: summaryToBlocks(json.patientSummary, chiefConcern),
+    cortisol: cortisolToBlocks(json.cortisolInterpretation),
   };
 }
 
@@ -640,5 +707,6 @@ export function toReevalNarrative(json: ReevalNarrativeJson): ReevalNarrative {
       }),
     ),
     patientSummary: summaryToBlocks(json.patientSummary, chiefConcern),
+    cortisol: cortisolToBlocks(json.cortisolInterpretation),
   };
 }

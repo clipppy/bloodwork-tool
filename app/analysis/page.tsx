@@ -55,7 +55,7 @@ type PriorPreview = {
 type GenStatus =
   | { kind: "idle" }
   | { kind: "processing" }
-  | { kind: "success"; narrated: boolean }
+  | { kind: "success"; narrated: boolean; salivaNote?: string | null }
   | { kind: "error"; message: string; deterministicAvailable?: boolean };
 
 /** Parsing, matching and flagging finish in about a second; everything after
@@ -84,6 +84,8 @@ export default function AnalysisPage() {
   const [priorPreview, setPriorPreview] = useState<PriorPreview | null>(null);
   const [priorPreviewLoading, setPriorPreviewLoading] = useState(false);
   const [priorReviewed, setPriorReviewed] = useState(false);
+  const [salivaFile, setSalivaFile] = useState<File | null>(null);
+  const [salivaError, setSalivaError] = useState<string | null>(null);
   const [dob, setDob] = useState("");
   const [sex, setSex] = useState("");
   const [hormoneStatus, setHormoneStatus] = useState<string>(DEFAULT_HORMONE_STATUS);
@@ -123,6 +125,7 @@ export default function AnalysisPage() {
   }, [sex, derivedStatus]);
   const inputRef = useRef<HTMLInputElement>(null);
   const priorInputRef = useRef<HTMLInputElement>(null);
+  const salivaInputRef = useRef<HTMLInputElement>(null);
 
   const generating = gen.kind === "processing";
 
@@ -180,6 +183,23 @@ export default function AnalysisPage() {
     setPriorError(null);
     resetPriorReview();
     if (priorInputRef.current) priorInputRef.current.value = "";
+  }
+
+  function acceptSalivaFile(f: File | undefined | null) {
+    if (!f) return;
+    if (!f.name.toLowerCase().endsWith(".pdf") && f.type !== "application/pdf") {
+      setSalivaError("The saliva cortisol report must be a PDF");
+      return;
+    }
+    setSalivaFile(f);
+    setSalivaError(null);
+    setGen({ kind: "idle" });
+  }
+
+  function clearSalivaFile() {
+    setSalivaFile(null);
+    setSalivaError(null);
+    if (salivaInputRef.current) salivaInputRef.current.value = "";
   }
 
   async function loadPriorPreview() {
@@ -243,6 +263,9 @@ export default function AnalysisPage() {
         if (priorReviewed) form.append("priorReviewed", "1");
       }
       if (skipNarrative) form.append("skipNarrative", "1");
+      // Optional 4-point saliva cortisol PDF; the server reduces it to values,
+      // clock times, windows and statuses before anything reaches the model.
+      if (salivaFile) form.append("salivaCortisol", salivaFile);
 
       const res = await fetch("/api/analysis/generate", {
         method: "POST",
@@ -269,6 +292,12 @@ export default function AnalysisPage() {
         match?.[1] ??
         (mode === "reeval" ? "clinical-analysis-reeval.docx" : "clinical-analysis.docx");
       const narrated = res.headers.get("X-Analysis-Narrative") === "included";
+      // "skipped; <reason>" when a saliva report was uploaded but unusable;
+      // the blood analysis still completed, so this is a notice, not an error.
+      const salivaHeader = res.headers.get("X-Saliva-Cortisol") || "";
+      const salivaNote = salivaHeader.startsWith("skipped;")
+        ? salivaHeader.slice("skipped;".length).trim()
+        : null;
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -280,7 +309,7 @@ export default function AnalysisPage() {
       a.remove();
       URL.revokeObjectURL(url);
 
-      setGen({ kind: "success", narrated });
+      setGen({ kind: "success", narrated, salivaNote });
     } catch {
       setGen({ kind: "error", message: "Something went wrong" });
     }
@@ -414,6 +443,47 @@ export default function AnalysisPage() {
         {fileError && (
           <p className="mt-2 text-center text-red-600">⚠ {fileError}</p>
         )}
+
+        {/* Optional 4-point saliva cortisol report (separate Quest PDF) */}
+        <div className="mt-6 rounded-md border p-4" style={{ borderColor: TEAL }}>
+          <label
+            htmlFor="analysis-saliva"
+            className="mb-1 block text-sm font-medium"
+            style={{ color: NAVY }}
+          >
+            Saliva cortisol report{" "}
+            <span className="font-normal opacity-70">(optional, .pdf)</span>
+          </label>
+          <input
+            id="analysis-saliva"
+            ref={salivaInputRef}
+            type="file"
+            accept=".pdf,application/pdf"
+            onChange={(e) => acceptSalivaFile(e.target.files?.[0])}
+            className="block w-full text-sm"
+          />
+          {salivaFile && (
+            <p className="mt-2 text-sm" style={{ color: NAVY }}>
+              {salivaFile.name}{" "}
+              <button
+                type="button"
+                onClick={clearSalivaFile}
+                className="ml-2 underline"
+                style={{ color: TEAL }}
+              >
+                × Remove
+              </button>
+            </p>
+          )}
+          {salivaError && <p className="mt-2 text-red-600">⚠ {salivaError}</p>}
+          <p className="mt-2 text-xs opacity-70">
+            The Quest &ldquo;Cortisol, LC/MS, Saliva, 4 Samples&rdquo; report. Only
+            the four values, their clock times, the reference windows and the
+            computed curve shape are used; no name, date of birth or specimen ID
+            is read from it. The report gets a cortisol table and a diurnal
+            interpretation alongside the hormone findings.
+          </p>
+        </div>
 
         {mode === "reeval" && (
           <div className="mt-6 rounded-md border p-4" style={{ borderColor: TEAL }}>
@@ -911,6 +981,11 @@ export default function AnalysisPage() {
                   : "Data-only analysis generated (narrative sections left as placeholders). Download starting..."}
               </span>
             </div>
+          )}
+          {gen.kind === "success" && gen.salivaNote && (
+            <p className="mt-2 text-sm" style={{ color: "#B26A00" }} role="status">
+              <span aria-hidden="true">⚠</span> Saliva cortisol skipped: {gen.salivaNote}
+            </p>
           )}
           {gen.kind === "error" && (
             <div className="text-red-600">

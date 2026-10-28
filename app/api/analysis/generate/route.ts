@@ -52,12 +52,17 @@ import {
   type ReevalNarrative,
 } from "../../../../lib/analysis/prompt";
 import {
-  INITIAL_NARRATIVE_SCHEMA,
-  REEVAL_NARRATIVE_SCHEMA,
+  initialNarrativeSchema,
+  reevalNarrativeSchema,
   type InitialNarrativeJson,
   type ReevalNarrativeJson,
 } from "../../../../lib/analysis/schemas";
 import { askClaudeStructured, AnalysisLlmError } from "../../../../lib/analysis/llm";
+import { parseSalivaCortisolPdf } from "../../../../lib/parsers/saliva-cortisol";
+import {
+  flagSalivaCortisol,
+  type SalivaCortisolFlags,
+} from "../../../../lib/analysis/saliva-cortisol";
 import {
   ingestPriorReport,
   PriorReportError,
@@ -73,6 +78,13 @@ export const dynamic = "force-dynamic";
 
 /** The analysis is a long generation; give it more room than the default. */
 const ANALYSIS_CALL_TIMEOUT_MS = 300_000;
+
+/** Non-fatal messages for a saliva cortisol upload the tool could not use.
+ *  Printed in the document and sent back in the X-Saliva-Cortisol header. */
+const SALIVA_NOT_RECOGNISED =
+  "The uploaded saliva cortisol file was not recognised as a Quest saliva cortisol report (no CORTISOL, SALIVA sample rows found), so the analysis continued without it.";
+const SALIVA_UNREADABLE =
+  "The uploaded saliva cortisol file could not be read as a PDF, so the analysis continued without it.";
 
 function slugify(name: string): string {
   return name
@@ -94,7 +106,12 @@ function reevalDownloadName(patientName: string, patientDate: string): string {
   return `clinical-analysis-reeval-${slug}-${patientDate}.docx`;
 }
 
-function docxResponse(buf: Buffer, filename: string, narrated: boolean): Response {
+function docxResponse(
+  buf: Buffer,
+  filename: string,
+  narrated: boolean,
+  extraHeaders: Record<string, string> = {},
+): Response {
   return new NextResponse(new Uint8Array(buf), {
     status: 200,
     headers: {
@@ -103,6 +120,7 @@ function docxResponse(buf: Buffer, filename: string, narrated: boolean): Respons
       "Content-Disposition": `attachment; filename="${filename}"`,
       "Content-Length": String(buf.length),
       "X-Analysis-Narrative": narrated ? "included" : "placeholders",
+      ...extraHeaders,
       "Cache-Control": "no-store",
     },
   });
@@ -156,6 +174,9 @@ export async function POST(req: Request): Promise<Response> {
   const priorFile = form.get("priorReport");
   const priorPanelDate = (form.get("priorPanelDate") as string | null)?.trim() || "";
   const priorReviewed = (form.get("priorReviewed") as string | null) === "1";
+  // Optional 4-point salivary cortisol report (a separate Quest PDF). Read
+  // and reduced to de-identified facts below; never fatal to the blood run.
+  const salivaFile = form.get("salivaCortisol");
 
   const patientName = patientNameRaw || "Patient";
   const patientDate = patientDateRaw || new Date().toISOString().slice(0, 10);
@@ -227,6 +248,31 @@ export async function POST(req: Request): Promise<Response> {
       cycleDay,
     });
     const flagged = overlay.markers;
+
+    // ----- Saliva cortisol (optional; never fatal to the blood analysis) -----
+    // Reduced to values / clock times / windows / statuses here; the raw
+    // text and any identifier on that PDF never leave this block.
+    let salivaCortisol: SalivaCortisolFlags | null = null;
+    let salivaCortisolNote: string | null = null;
+    if (salivaFile && typeof salivaFile !== "string" && salivaFile.size > 0) {
+      try {
+        const salivaParsed = await parseSalivaCortisolPdf(
+          Buffer.from(await salivaFile.arrayBuffer()),
+        );
+        if (salivaParsed) salivaCortisol = flagSalivaCortisol(salivaParsed);
+        else salivaCortisolNote = SALIVA_NOT_RECOGNISED;
+      } catch {
+        salivaCortisolNote = SALIVA_UNREADABLE;
+      }
+    }
+    const salivaHeaders: Record<string, string> = {
+      "X-Saliva-Cortisol": salivaCortisol
+        ? `parsed; ${salivaCortisol.samples.length} samples; ${salivaCortisol.curve.pattern}`
+        : salivaCortisolNote
+          ? `skipped; ${salivaCortisolNote}`
+          : "none",
+    };
+
     analysis = buildDeterministicAnalysis(flagged, {
       patientName,
       patientDate,
@@ -235,6 +281,8 @@ export async function POST(req: Request): Promise<Response> {
       collectedDate: parsed.patientMeta.collectedDate,
       reportedDate: parsed.patientMeta.reportedDate,
       hormone: overlay.summary,
+      salivaCortisol,
+      salivaCortisolNote,
     });
 
     // ----- Re-evaluation -----
@@ -262,6 +310,7 @@ export async function POST(req: Request): Promise<Response> {
       const priorHeaders = {
         "X-Prior-Report": `${ingested.kind}; ${ingested.rawChars} chars; ${ingested.redactionCount} redactions`,
         "X-Prior-Residual-Names": String(ingested.residualNameCandidates.length),
+        ...salivaHeaders,
       };
 
       // Deterministic scaffold only — the 2a document, on request or as the
@@ -297,6 +346,7 @@ export async function POST(req: Request): Promise<Response> {
         hormone: analysis.hormone,
         priorPanelInterval: interval,
         priorReportText: ingested.redactedText,
+        salivaCortisol,
       });
       const serialized = serializePayload(payload);
       assertNoIdentifiers(serialized, { patientName: patientNameRaw, dob });
@@ -307,7 +357,7 @@ export async function POST(req: Request): Promise<Response> {
           buildReevalPrompt(payload),
           {
             system: REEVAL_SYSTEM_PROMPT,
-            schema: REEVAL_NARRATIVE_SCHEMA as unknown as Record<string, unknown>,
+            schema: reevalNarrativeSchema({ cortisol: !!salivaCortisol }),
             timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
           },
         );
@@ -335,7 +385,7 @@ export async function POST(req: Request): Promise<Response> {
 
     if (skipNarrative) {
       const buf = await generateAnalysisReport(analysis, null);
-      return docxResponse(buf, downloadName(patientNameRaw, patientDate), false);
+      return docxResponse(buf, downloadName(patientNameRaw, patientDate), false, salivaHeaders);
     }
 
     // ----- De-identified payload -----
@@ -347,6 +397,7 @@ export async function POST(req: Request): Promise<Response> {
       patientName: patientNameRaw,
       dob,
       hormone: analysis.hormone,
+      salivaCortisol,
     });
     const serialized = serializePayload(payload);
     assertNoIdentifiers(serialized, { patientName: patientNameRaw, dob });
@@ -358,7 +409,7 @@ export async function POST(req: Request): Promise<Response> {
         buildInitialAnalysisPrompt(payload),
         {
           system: SYSTEM_PROMPT,
-          schema: INITIAL_NARRATIVE_SCHEMA as unknown as Record<string, unknown>,
+          schema: initialNarrativeSchema({ cortisol: !!salivaCortisol }),
           timeoutMs: ANALYSIS_CALL_TIMEOUT_MS,
         },
       );
@@ -377,7 +428,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const buf = await generateAnalysisReport(analysis, narrative);
-    return docxResponse(buf, downloadName(patientNameRaw, patientDate), true);
+    return docxResponse(buf, downloadName(patientNameRaw, patientDate), true, salivaHeaders);
   } catch (err) {
     // Without this, an unexpected failure reaches the practitioner as a bare
     // "Something went wrong" with nothing in the log to diagnose it.

@@ -31,8 +31,74 @@ import {
   type PatientSex,
 } from "./deterministic";
 import type { HormoneOverlaySummary } from "./hormone-ranges";
+import type { SalivaCortisolFlags } from "./saliva-cortisol";
 
 export const REDACTED = "[REDACTED]";
+
+// ----- Salivary cortisol block (allow-listed) -----
+
+export interface PayloadCortisolSample {
+  /** "Morning (8-10 AM)" — the window the sample stands for, by order. */
+  timeLabel: string;
+  /** Clock time printed on the report ("8:18 AM"), or null. A time of day is
+   *  not an identifier; the draw DATE never leaves. */
+  drawTime: string | null;
+  value: number;
+  unit: string;
+  /** "0.04-0.56 mcg/dL" / "<= 0.21 mcg/dL". */
+  rangeText: string;
+  status: "in-range" | "above-range" | "below-range";
+  /** Morning sample only: percent of the way up its window. */
+  percentOfRange: number | null;
+}
+
+export interface PayloadCortisolCurve {
+  pattern: "declining" | "flat" | "rising" | "incomplete";
+  morningToNightDropPercent: number | null;
+  declinesMonotonically: boolean;
+  lowAmplitude: boolean;
+  peakSlot: string | null;
+  aboveRangeSlots: string[];
+  belowRangeSlots: string[];
+  /** Plain statements of the computed facts (no conclusions). */
+  notes: string[];
+}
+
+export interface SalivaCortisolPayload {
+  samples: PayloadCortisolSample[];
+  curve: PayloadCortisolCurve;
+  windowsSource: "printed" | "standard";
+}
+
+/**
+ * Copy the saliva cortisol facts field by field. Like the marker payload, this
+ * never spreads the source object, so a field added upstream (a date, a raw
+ * line) cannot leak without being named here.
+ */
+export function buildSalivaCortisolBlock(flags: SalivaCortisolFlags): SalivaCortisolPayload {
+  return {
+    samples: flags.samples.map((s) => ({
+      timeLabel: s.timeLabel,
+      drawTime: s.drawTime,
+      value: s.value,
+      unit: s.unit,
+      rangeText: s.rangeText,
+      status: s.status,
+      percentOfRange: s.percentOfRange,
+    })),
+    curve: {
+      pattern: flags.curve.pattern,
+      morningToNightDropPercent: flags.curve.morningToNightDropPercent,
+      declinesMonotonically: flags.curve.declinesMonotonically,
+      lowAmplitude: flags.curve.lowAmplitude,
+      peakSlot: flags.curve.peakSlot,
+      aboveRangeSlots: [...flags.curve.aboveRangeSlots],
+      belowRangeSlots: [...flags.curve.belowRangeSlots],
+      notes: [...flags.curve.notes],
+    },
+    windowsSource: flags.windowsSource,
+  };
+}
 
 export interface PayloadMarker {
   name: string;
@@ -68,6 +134,9 @@ export interface AnalysisPayload {
    *  practitioner-supplied functional ranges, which were left on the lab range
    *  and why). Empty when it did not apply. */
   hormoneNotes: string[];
+  /** 4-point salivary cortisol facts when a saliva report was uploaded and
+   *  read; null otherwise. Values, clock times, windows and statuses only. */
+  salivaCortisol: SalivaCortisolPayload | null;
 }
 
 export interface DeidentifyInputs {
@@ -80,6 +149,8 @@ export interface DeidentifyInputs {
   dob?: string | null;
   /** Hormone overlay summary from the deterministic step, when it ran. */
   hormone?: HormoneOverlaySummary | null;
+  /** Saliva cortisol facts from flagSalivaCortisol(), when a report was read. */
+  salivaCortisol?: SalivaCortisolFlags | null;
 }
 
 // ----- Structural (label-driven) redaction -----
@@ -397,6 +468,7 @@ export function buildPayload(
     flaggedMarkers,
     inRangeMarkers,
     hormoneNotes: hormone ? [...hormone.notes] : [],
+    salivaCortisol: inputs.salivaCortisol ? buildSalivaCortisolBlock(inputs.salivaCortisol) : null,
   };
 }
 
@@ -421,6 +493,8 @@ export interface ReevalPayload {
   priorReportText: string;
   /** See AnalysisPayload.hormoneNotes. */
   hormoneNotes: string[];
+  /** See AnalysisPayload.salivaCortisol. */
+  salivaCortisol: SalivaCortisolPayload | null;
 }
 
 export interface ReevalDeidentifyInputs extends DeidentifyInputs {
@@ -451,6 +525,7 @@ export function buildReevalPayload(
       })),
     priorReportText: inputs.priorReportText,
     hormoneNotes: base.hormoneNotes,
+    salivaCortisol: base.salivaCortisol,
   };
 }
 

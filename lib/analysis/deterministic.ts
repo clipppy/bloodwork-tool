@@ -24,6 +24,7 @@ import {
   hormoneOverlayOf,
   type HormoneOverlaySummary,
 } from "./hormone-ranges";
+import type { SalivaCortisolFlags } from "./saliva-cortisol";
 
 // ----- Fixed report text (verbatim from the Robidoux sample) -----
 
@@ -122,6 +123,12 @@ export interface DeterministicAnalysis {
   /** What the female-hormone overlay did on this panel (status, markers it
    *  supplied an optimal for, plain-English notes). null when it did not run. */
   hormone: HormoneOverlaySummary | null;
+  /** 4-point salivary cortisol facts when a saliva report was uploaded and
+   *  read (lib/analysis/saliva-cortisol); null otherwise. */
+  salivaCortisol: SalivaCortisolFlags | null;
+  /** Non-fatal note when a saliva report was uploaded but could not be read,
+   *  so the document says so instead of silently omitting the section. */
+  salivaCortisolNote: string | null;
 }
 
 export interface AnalysisInputs {
@@ -136,6 +143,11 @@ export interface AnalysisInputs {
   /** Result of lib/analysis/hormone-ranges applyHormoneOverlay(), when the
    *  caller ran it over the flagged set it is passing in. */
   hormone?: HormoneOverlaySummary | null;
+  /** Result of lib/analysis/saliva-cortisol flagSalivaCortisol(), when a
+   *  saliva cortisol report was uploaded and read. */
+  salivaCortisol?: SalivaCortisolFlags | null;
+  /** Set when a saliva report was uploaded but could not be read. */
+  salivaCortisolNote?: string | null;
 }
 
 /** Whole years between a "YYYY-MM-DD" DOB and `asOf`. null if unparseable. */
@@ -742,5 +754,7 @@ export function buildDeterministicAnalysis(
     age,
     sex,
     hormone,
+    salivaCortisol: inputs.salivaCortisol ?? null,
+    salivaCortisolNote: inputs.salivaCortisolNote ?? null,
   };
 }

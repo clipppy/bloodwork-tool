@@ -140,6 +140,52 @@ export const INITIAL_NARRATIVE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+// ----- Salivary cortisol (present only when a saliva report was read) -----
+
+/**
+ * Added to either mode's schema when the payload carries a `salivaCortisol`
+ * block. Kept out of the base schema so a run without a saliva report never
+ * asks the model for a section it has no data for.
+ */
+export const CORTISOL_INTERPRETATION_FIELD = stringArray(
+  "Practitioner-facing interpretation of the 4-point salivary cortisol curve, " +
+    "one string per short paragraph (two to four). Cover the morning peak " +
+    "(adequate / low / high and where it sits in its window), the decline across " +
+    "the day (slope, any flattening or blunting), and overall output, framed " +
+    "functionally and in plain language. Close with the standard caveats: a " +
+    "single-day snapshot; wake time, sleep aids and medication timing are " +
+    "confounders; this pattern does not diagnose adrenal insufficiency; an 8 AM " +
+    "serum cortisol with or without ACTH is suggested only if symptoms warrant. " +
+    "Cite the sample values and windows exactly as given in `salivaCortisol`.",
+);
+
+export type NarrativeSchemaOptions = {
+  /** Include the cortisolInterpretation field (saliva report present). */
+  cortisol: boolean;
+};
+
+function withCortisol<T extends { properties: Record<string, unknown>; required: readonly string[] }>(
+  base: T,
+  opts: NarrativeSchemaOptions,
+): Record<string, unknown> {
+  if (!opts.cortisol) return base as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    properties: { ...base.properties, cortisolInterpretation: CORTISOL_INTERPRETATION_FIELD },
+    required: [...base.required, "cortisolInterpretation"],
+  };
+}
+
+/** INITIAL_NARRATIVE_SCHEMA, plus the cortisol field when requested. */
+export function initialNarrativeSchema(opts: NarrativeSchemaOptions): Record<string, unknown> {
+  return withCortisol(INITIAL_NARRATIVE_SCHEMA, opts);
+}
+
+/** REEVAL_NARRATIVE_SCHEMA, plus the cortisol field when requested. */
+export function reevalNarrativeSchema(opts: NarrativeSchemaOptions): Record<string, unknown> {
+  return withCortisol(REEVAL_NARRATIVE_SCHEMA, opts);
+}
+
 export interface PatientSummaryJson {
   whatsGoingWell: string;
   likelyDrivers: string;
@@ -160,6 +206,8 @@ export interface InitialNarrativeJson {
   rootCauseAnalysis: PatternJson[];
   phasedProtocol: Array<{ phase: string; goal: string; bullets: string[] }>;
   patientSummary: PatientSummaryJson;
+  /** Present only when the schema was built with { cortisol: true }. */
+  cortisolInterpretation?: string[];
 }
 
 // ----- Re-evaluation mode -----
@@ -256,4 +304,6 @@ export interface ReevalNarrativeJson {
   alreadyImproving: string[];
   backgroundFindings: string[];
   patientSummary: PatientSummaryJson;
+  /** Present only when the schema was built with { cortisol: true }. */
+  cortisolInterpretation?: string[];
 }

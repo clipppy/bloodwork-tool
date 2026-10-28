@@ -47,6 +47,10 @@ import {
   type NarrativeBlock,
   type ReevalNarrative,
 } from "../analysis/prompt";
+import {
+  cortisolStatusWord,
+  formatCortisolResult,
+} from "../analysis/saliva-cortisol";
 
 // ----- Brand (matches generator/word.ts; duplicated because those constants
 // are module-private there and that file is intentionally not modified) -----
@@ -235,6 +239,9 @@ function buildDocument(
     }
   }
   children.push(...buildHormoneNotes(analysis));
+  // Salivary cortisol (when a saliva report was uploaded), with the endocrine
+  // findings; the model's diurnal reading sits under its own table.
+  children.push(...buildSalivaCortisolSection(analysis, narrative ? narrative.cortisol : null));
   // Narrative reading of the in-range markers (LLM), after the code-built list.
   if (narrative) children.push(...renderBlocks(narrative.reassuring));
   children.push(...buildReassuringParagraphs(analysis));
@@ -462,6 +469,10 @@ function buildReevalDocument(
       }),
     );
   }
+
+  // Salivary cortisol (when uploaded) closes the comparison section, with the
+  // endocrine findings, whether or not any marker was out of range.
+  children.push(...buildSalivaCortisolSection(analysis, narrative ? narrative.cortisol : null));
 
   // Part III — comparative root causes (LLM, 2b)
   children.push(sectionHeading("Part III: Root Cause Analysis"));
@@ -833,6 +844,116 @@ function buildHormoneNotes(analysis: DeterministicAnalysis): Paragraph[] {
 }
 
 // Draw block: label/value across the full width.
+// ----- Salivary cortisol sub-section (analysis path only) -----
+
+const CX_TIME = 2700;
+const CX_RESULT = 1700;
+const CX_WINDOW = 2460;
+const CX_STATUS = 2500;
+const CX_GRID = [CX_TIME, CX_RESULT, CX_WINDOW, CX_STATUS]; // 9360
+
+/**
+ * One row per timed saliva sample (Time | Result | Reference Window | Status)
+ * with the same status chips as the marker chart, the tool's computed curve
+ * facts underneath, and then the model's diurnal interpretation (or its
+ * placeholder). Sits with the hormone / endocrine findings at the end of the
+ * marker section. Renders a one-line note instead when a saliva report was
+ * uploaded but could not be read, and nothing at all when none was uploaded.
+ */
+function buildSalivaCortisolSection(
+  analysis: DeterministicAnalysis,
+  interpretation: NarrativeBlock[] | null,
+): Array<Paragraph | Table> {
+  const flags = analysis.salivaCortisol;
+  const note = analysis.salivaCortisolNote;
+  if (!flags && !note) return [];
+
+  const out: Array<Paragraph | Table> = [];
+  out.push(groupHeading("Salivary Cortisol — 4-Point Diurnal Curve"));
+
+  if (!flags) {
+    out.push(
+      new Paragraph({
+        spacing: { after: 200 },
+        children: [runItalic(note ?? "", GREY, 18)],
+      }),
+    );
+    return out;
+  }
+
+  const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
+  const head = new TableRow({
+    tableHeader: true,
+    children: [
+      chartHeaderCell("Sample / Time", CX_TIME, shading),
+      chartHeaderCell("Result", CX_RESULT, shading),
+      chartHeaderCell("Reference Window", CX_WINDOW, shading),
+      chartHeaderCell("Status", CX_STATUS, shading),
+    ],
+  });
+  const body = flags.samples.map(
+    (s) =>
+      new TableRow({
+        cantSplit: true,
+        children: [
+          chartCell(
+            s.drawTime ? `${s.timeLabel} — drawn ${s.drawTime}` : s.timeLabel,
+            CX_TIME,
+            { bold: true },
+          ),
+          chartCell(formatCortisolResult(s), CX_RESULT, { bold: true }),
+          chartCell(s.rangeText, CX_WINDOW),
+          chipCell(
+            statusChip(cortisolStatusWord(s.status), s.status === "in-range"),
+            CX_STATUS,
+          ),
+        ],
+      }),
+  );
+  out.push(
+    new Table({
+      width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+      columnWidths: CX_GRID,
+      rows: [head, ...body],
+    }),
+  );
+
+  // The computed curve facts, so the practitioner can check the narrative
+  // against them.
+  out.push(
+    new Paragraph({
+      spacing: { before: 100, after: 60 },
+      children: [runBold("Curve facts (computed): ", NAVY, 18)],
+    }),
+    ...flags.curve.notes.map(
+      (n, i) =>
+        new Paragraph({
+          spacing: { after: i === flags.curve.notes.length - 1 ? 160 : 40 },
+          children: [runItalic(n, GREY, 18)],
+        }),
+    ),
+  );
+
+  if (interpretation === null) {
+    out.push(
+      llmPlaceholder(
+        "Diurnal Cortisol Interpretation",
+        "Morning peak adequacy, decline across the day, flattening / blunting and overall output, with the standard single-day-snapshot caveats.",
+      ),
+    );
+  } else if (interpretation.length) {
+    out.push(
+      new Paragraph({
+        spacing: { before: 120, after: 60 },
+        keepNext: true,
+        children: [runBold("Diurnal interpretation", NAVY, 20)],
+      }),
+      ...renderBlocks(interpretation),
+    );
+  }
+  return out;
+}
+
 const DRAW_LABEL = 2200;
 const DRAW_VALUE = CONTENT_WIDTH - DRAW_LABEL; // 7160
 const DRAW_GRID = [DRAW_LABEL, DRAW_VALUE];
