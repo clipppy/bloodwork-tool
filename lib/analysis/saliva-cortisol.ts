@@ -103,8 +103,9 @@ function statusAgainst(value: number, w: SalivaWindow): CortisolSampleStatus {
   return "in-range";
 }
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
+/** Two decimals, the precision the lab prints saliva cortisol at. */
+function fmt2(n: number): string {
+  return n.toFixed(2);
 }
 
 function sampleFact(s: SalivaCortisolSample, slot: CortisolSlot, w: SalivaWindow): CortisolSampleFact {
@@ -180,7 +181,7 @@ export function flagSalivaCortisol(parsed: SalivaCortisolParse): SalivaCortisolF
   }
   if (drop !== null && dropPercent !== null) {
     notes.push(
-      `Morning-to-night change: ${drop >= 0 ? "fall" : "rise"} of ${round1(Math.abs(drop))} ${morning!.unit} (${Math.abs(dropPercent)}% of the morning value).`,
+      `Morning-to-night change: ${drop >= 0 ? "fall" : "rise"} of ${fmt2(Math.abs(drop))} ${morning!.unit} (${Math.abs(dropPercent)}% of the morning value).`,
     );
   }
   if (samples.length >= 2) {

@@ -98,6 +98,7 @@ const normal = flagSalivaCortisol(report([0.42, 0.14, 0.08, 0.03]));
   ok(c.aboveRangeSlots.length === 0 && c.belowRangeSlots.length === 0, "normal: nothing out of range");
   ok(c.notes.some((n) => n.includes("Curve shape: declining")), "normal: notes state the shape");
   ok(c.notes.some((n) => n.includes("73% of the way up")), "normal: notes state the morning position");
+  ok(c.notes.some((n) => n.includes("fall of 0.39 mcg/dL (93%")), "normal: drop printed to two decimals, not rounded to 0.4");
   ok(!c.notes.some((n) => /diagnos|insufficien|fatigue|dysregulat/i.test(n)), "normal: notes carry no clinical conclusion");
   ok(normal.windowsSource === "printed", "normal: windows printed");
 }
@@ -140,7 +141,7 @@ const flat = flagSalivaCortisol(report([0.06, 0.05, 0.05, 0.045]));
   const rising = flagSalivaCortisol(report([0.05, 0.1, 0.12, 0.2]));
   ok(rising.curve.pattern === "rising" && !rising.curve.declinesMorningToNight && !rising.curve.declinesMonotonically, "rising: pattern rising");
   ok(rising.curve.peakSlot === "night" && rising.curve.morningToNightDropPercent === -300, "rising: peak at night, negative drop");
-  ok(rising.curve.notes.some((n) => n.includes("rise of 0.2")), "rising: notes describe a rise");
+  ok(rising.curve.notes.some((n) => n.includes("rise of 0.15 mcg/dL")), "rising: notes describe a rise to two decimals");
 
   const partial = flagSalivaCortisol(report([0.3, 0.1]));
   ok(partial.curve.sampleCount === 2 && partial.curve.pattern === "incomplete", "partial: two samples -> incomplete");

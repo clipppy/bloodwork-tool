@@ -5,8 +5,8 @@
  *
  *   CORTISOL, LC/MS, SALIVA, 4 SAMPLES
  *   CORTISOL, LC/MS, SALIVA, SAMPLE 1
- *   DRAW DATE 1            04/10/2026
- *   DRAW TIME 1            8:18AM
+ *   DRAW DATE 1 (33882-2)  04/10/2026
+ *   DRAW TIME 1 (49049-0)  8:18AM
  *   CORTISOL, SALIVA SAMPLE 1   0.32 mcg/dL   See Note 1
  *   ... (samples 2-4) ...
  *   Note 1
@@ -14,6 +14,9 @@
  *   noon-2 PM:   < or = 0.21 mcg/dL
  *   4-6 PM:      < or = 0.15 mcg/dL
  *   10 PM-1 AM:  < or = 0.09 mcg/dL
+ *
+ * Real reports print a LOINC code in parentheses between the DRAW DATE /
+ * DRAW TIME label and the value; it is optional in the regexes below.
  *
  * Sample N maps to the Nth reference window by ORDER (1 morning, 2 noon,
  * 3 afternoon, 4 night). The draw time is carried along as confirmatory
@@ -117,9 +120,10 @@ export function parseSalivaCortisolText(text: string): SalivaCortisolParse | nul
 const SAMPLE_ROW_RE =
   /CORTISOL\s*,\s*SALIVA\s+SAMPLE\s*([1-4])\s*[:\s]\s*([<>]?)\s*(\d+(?:\.\d+)?)\s*(?:H|L)?\s*(mcg\/dL|ug\/dL|µg\/dL|μg\/dL)?/gi;
 
-// "8:18AM", "12:45 P.M.", or a bare 24-hour "0818" / "1705".
+// "8:18AM", "12:45 P.M.", or a bare 24-hour "0818" / "1705". An optional
+// parenthesised LOINC code ("(49049-0)") may sit between the label and the time.
 const DRAW_TIME_RE =
-  /DRAW\s*TIME\s*([1-4])\s*:?\s*(\d{3,4}|\d{1,2})(?::(\d{2}))?\s*(AM|PM|A\.M\.|P\.M\.)?/gi;
+  /DRAW\s*TIME\s*([1-4])(?:\s*\([^)]*\))?\s*:?\s*(\d{3,4}|\d{1,2})(?::(\d{2}))?\s*(AM|PM|A\.M\.|P\.M\.)?/gi;
 
 function extractSamples(text: string): SalivaCortisolSample[] {
   const times = new Map<number, string>();
@@ -216,7 +220,9 @@ export function parseWindowText(raw: string): SalivaWindow | null {
 // ----- Collection date (local header use only) -----
 
 function extractCollectedDate(text: string): string | null {
-  const draw = text.match(/DRAW\s*DATE\s*1\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i);
+  // The first sample's draw date wins; the report's "Collected" line is the
+  // fallback. An optional "(33882-2)" LOINC code may follow the label.
+  const draw = text.match(/DRAW\s*DATE\s*1(?:\s*\([^)]*\))?\s*:?\s*(\d{2}\/\d{2}\/\d{4})/i);
   if (draw) return draw[1];
   const collected = text.match(/^\s*Collected:\s*(\d{2}\/\d{2}\/\d{4})/m);
   return collected ? collected[1] : null;

@@ -5,7 +5,10 @@
  * The text fixture mirrors the Quest "CORTISOL, LC/MS, SALIVA, 4 SAMPLES"
  * report line for line (title, four sample blocks with draw date / draw time
  * / result row, and the Note 1 reference windows), with made-up values and
- * a made-up header. The real blood-panel sample PDF in samples/quest doubles
+ * a made-up header. The DRAW DATE / DRAW TIME lines carry the parenthesised
+ * LOINC codes and tab separators exactly as the real report prints them;
+ * the first shipped regex did not allow the code and every draw time came
+ * back null on a real PDF. The real blood-panel sample PDF in samples/quest doubles
  * as the "not a saliva report" case for the PDF entry point.
  *
  * Run: npx tsx lib/parsers/saliva-cortisol.test.ts   (or: npm run test:saliva-parser)
@@ -41,17 +44,20 @@ const HEADER = [
   "Gender: F Fasting: N",
   "Patient ID: 01021980JD",
   "Specimen: WC999999X",
-  "Collected: 04/10/2026 / 08:18 EDT",
-  "Reported: 04/16/2026 / 20:30 EDT",
+  "Collected: 04/11/2026 16:20",
+  "Received: 04/11/2026 16:22",
+  "Reported: 04/16/2026 20:30",
   "Test Name In Range Out Of Range Reference Range Lab",
 ];
 
+// Real-format sample block: LOINC codes after the DRAW labels, tab-separated
+// columns, trailing FINAL status, as pdf-parse renders the Quest PDF.
 function sampleBlock(n: number, date: string, time: string, value: string): string[] {
   return [
-    `CORTISOL, LC/MS, SALIVA, SAMPLE ${n}`,
-    `DRAW DATE ${n} ${date}`,
-    `DRAW TIME ${n} ${time}`,
-    `CORTISOL, SALIVA SAMPLE ${n} ${value} mcg/dL See Note 1`,
+    `Lab: EZ\tCORTISOL, LC/MS, SALIVA, SAMPLE ${n} \tFINAL`,
+    `DRAW DATE ${n} (33882-2) \t${date} \tFINAL`,
+    `DRAW TIME ${n} (49049-0) \t${time} \tFINAL`,
+    `CORTISOL, SALIVA SAMPLE ${n} \t${value} \tmcg/dL See Note 1 \tFINAL`,
   ];
 }
 
@@ -66,7 +72,7 @@ const NOTE = [
 
 const FIXTURE = [
   ...HEADER,
-  "CORTISOL, LC/MS, SALIVA, 4 SAMPLES",
+  "CORTISOL, LC/MS, SALIVA, 4 SAMPLES \tFINAL",
   ...sampleBlock(1, "04/10/2026", "8:18AM", "0.32"),
   ...sampleBlock(2, "04/10/2026", "12:45PM", "0.14"),
   ...sampleBlock(3, "04/10/2026", "5:05PM", "0.09"),
@@ -120,8 +126,17 @@ if (parsed) {
   ok(formatSalivaWindow(parsed.windows.morning) === "0.04-0.56 mcg/dL", "morning window formats as a span");
   ok(formatSalivaWindow(parsed.windows.night) === "<= 0.09 mcg/dL", "night window formats with <=");
 
+  // Every draw time must be read past the LOINC code; none may be null.
+  ok(parsed.samples.every((s) => s.drawTime !== null), "all four draw times parsed past the LOINC code (none null)");
+  ok(
+    parsed.samples.map((s) => s.drawTime).join("|") === "8:18 AM|12:45 PM|5:05 PM|9:20 PM",
+    `draw times in order (got ${parsed.samples.map((s) => s.drawTime).join("|")})`,
+  );
+
   // ----- 4. Collection date is the first draw date; nothing else is kept -----
-  ok(parsed.collectedDate === "04/10/2026", `collected date from DRAW DATE 1 (got ${parsed.collectedDate})`);
+  // DRAW DATE 1 (04/10) beats the header's Collected line (04/11).
+  ok(parsed.collectedDate === "04/10/2026", `collected date from DRAW DATE 1, not the Collected line (got ${parsed.collectedDate})`);
+  ok(parsed.collectedDate !== "04/11/2026", "collected date is not the report's Collected line");
   const serialized = JSON.stringify(parsed);
   for (const id of ["DOE", "JANE", "01/02/1980", "01021980JD", "WC999999X", "Patient", "DOB", "Specimen"]) {
     ok(!serialized.includes(id), `parse output carries no "${id}"`);
@@ -181,6 +196,7 @@ ok(half !== null && half.windowsSource === "standard" && half.windows.morning.ma
 
 const variants = [
   "CORTISOL, LC/MS, SALIVA, 4 SAMPLES",
+  "DRAW DATE 1 04/10/2026",
   "DRAW TIME 1 0818",
   "CORTISOL, SALIVA SAMPLE 1 0.70 H mcg/dL See Note 1",
   "DRAW TIME 2 12:45 P.M.",
@@ -194,6 +210,7 @@ const variants = [
 const v = parseSalivaCortisolText(variants);
 ok(v !== null && v.samples.length === 3, `variant rows: 3 samples (got ${v?.samples.length})`);
 if (v) {
+  ok(v.collectedDate === "04/10/2026", "bare DRAW DATE 1 (no LOINC code) still reads");
   ok(v.samples[0].value === 0.7 && v.samples[0].drawTime === "8:18 AM", "lab H flag and 0818 time read");
   ok(v.samples[1].value === 0.02 && v.samples[1].qualifier === "<" && v.samples[1].drawTime === "12:45 PM", "wrapped censored value <0.02 read with qualifier");
   ok(v.samples[2].value === 0.1 && v.samples[2].drawTime === "5:05 PM", "ug/dL row and 1705 time read; duplicate sample 3 ignored (first wins)");
