@@ -116,6 +116,11 @@ export interface DeterministicAnalysis {
    *  chart. Built for both modes; only the re-eval document renders it. */
   comparisonGroups: ComparisonGroup[];
   reassuring: ReassuringMarkers;
+  /** Markers inside BOTH the lab range and the functional optimal target, as
+   *  chart rows (status "OPTIMAL") for the chart's green "What's Working"
+   *  tier. Same formatters and order as `rows`; the engine's verdict is
+   *  never re-derived here. Rendered only; never part of the API payload. */
+  optimalRows: ChartRow[];
   /** Integer age derived from the DOB, or null. This — not the DOB — is what
    *  the API payload is allowed to carry. */
   age: number | null;
@@ -350,6 +355,26 @@ export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
         category: findMarker(m.canonicalName)?.category ?? "",
       };
     });
+}
+
+/** The in-range counterpart of buildChartRows: every marker the engine read
+ *  as optimal, in the same category / name order, with the status the chip
+ *  vocabulary already knows ("OPTIMAL" -> green). A marker the engine could
+ *  not evaluate (not_flaggable / informational) is in neither list. */
+export function buildOptimalRows(flagged: FlaggedMarker[]): ChartRow[] {
+  return flagged
+    .filter((m) => m.flagStatus === "optimal")
+    .slice()
+    .sort(compareRows)
+    .map((m) => ({
+      marker: m.canonicalName,
+      result: formatResult(m),
+      labRange: formatLabRange(m),
+      optimalRange: formatOptimalRange(m),
+      status: "OPTIMAL",
+      withinLabRange: withinLabRange(m),
+      category: findMarker(m.canonicalName)?.category ?? "",
+    }));
 }
 
 // ----- Re-evaluation mode: category-grouped comparison rows -----
@@ -751,6 +776,7 @@ export function buildDeterministicAnalysis(
     rows: buildChartRows(flagged),
     comparisonGroups: buildComparisonGroups(flagged),
     reassuring: buildReassuring(flagged),
+    optimalRows: buildOptimalRows(flagged),
     age,
     sex,
     hormone,

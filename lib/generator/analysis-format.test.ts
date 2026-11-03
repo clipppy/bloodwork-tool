@@ -3,8 +3,8 @@
  * other tests here: a self-contained tsx script with a local ok(), non-zero
  * exit on failure.
  *
- * These three functions decide what the Marker, Functional/Optimal, and Status
- * columns actually print. They are pure string transforms over what
+ * These functions decide what the Marker, Functional/Optimal, and Status
+ * columns actually print, and which severity tier a row is charted under. They are pure string transforms over what
  * deterministic.ts computed — they never touch a value or re-derive a flag —
  * so they are cheap to pin down and expensive to get wrong silently.
  *
@@ -12,11 +12,20 @@
  */
 
 import {
+  CHART_TIERS,
+  TIER_LABELS,
   shortMarkerName,
   displayOptimalRange,
+  groupByTier,
   statusChip,
+  tierForChartRow,
+  tierForComparisonRow,
 } from "./analysis-word";
 import { OPTIMAL_RANGES } from "../ranges/optimal-ranges";
+import type { MatchedMarker } from "../matcher";
+import { flagMarkers } from "../flagging";
+import { buildChartRows, buildOptimalRows } from "../analysis/deterministic";
+import { groupBySystem, systemForMarker } from "../analysis/body-systems";
 
 let passed = 0;
 const failures: string[] = [];
@@ -158,6 +167,92 @@ function main() {
   eq(statusChip("Not retested", null).label, "Not retested", "not-retested label");
   eq(statusChip("New Finding", null).label, "New Finding", "new-finding label");
   eq(statusChip("New Finding", null).fill, NEW, "new-finding is the neutral blue-gray");
+  // The green tier's own rows (deterministic status "OPTIMAL").
+  eq(statusChip("OPTIMAL", true).label, "Optimal", "OPTIMAL label");
+  eq(statusChip("OPTIMAL", true).fill, GREEN, "OPTIMAL is green");
+  eq(statusChip("OPTIMAL", true).direction, "", "OPTIMAL has no direction");
+
+  // ----- Severity tiers: the chart's primary grouping -----
+  ok(CHART_TIERS.join(",") === "outside-lab,outside-optimal,optimal", "tier order is red, amber, green");
+  eq(TIER_LABELS["outside-lab"], "Outside Lab Reference Range", "tier A label");
+  eq(TIER_LABELS["outside-optimal"], "Inside Lab Range, Outside Functional Optimal", "tier B label");
+  eq(TIER_LABELS.optimal, "Optimal — What's Working", "tier C label");
+
+  // Initial-mode rows: the tier follows the same rule as the chip colour.
+  eq(tierForChartRow({ status: "HIGH", withinLabRange: false }), "outside-lab", "HIGH outside lab -> red tier");
+  eq(tierForChartRow({ status: "LOW", withinLabRange: false }), "outside-lab", "LOW outside lab -> red tier");
+  eq(tierForChartRow({ status: "MODERATE", withinLabRange: null }), "outside-lab", "no usable lab range -> red tier");
+  eq(tierForChartRow({ status: "ABOVE OPTIMAL*", withinLabRange: true }), "outside-optimal", "ABOVE OPTIMAL* -> amber tier");
+  eq(tierForChartRow({ status: "BORDERLINE LOW*", withinLabRange: true }), "outside-optimal", "BORDERLINE LOW* -> amber tier");
+  eq(tierForChartRow({ status: "MODERATE*", withinLabRange: true }), "outside-optimal", "MODERATE* -> amber tier");
+  eq(tierForChartRow({ status: "OPTIMAL", withinLabRange: true }), "optimal", "OPTIMAL -> green tier");
+  // Tier and chip colour can never disagree, across the whole vocabulary.
+  const fillOf = { "outside-lab": RED, "outside-optimal": AMBER, optimal: GREEN } as const;
+  for (const v of ["HIGH", "LOW", "MODERATE", "MODERATE*", "OUT OF RANGE", "OUT OF RANGE*", "ABOVE OPTIMAL*", "SUBOPTIMAL*", "BORDERLINE HIGH*", "BORDERLINE LOW*", "OPTIMAL"]) {
+    for (const within of [true, false, null] as const) {
+      const tier = tierForChartRow({ status: v, withinLabRange: within });
+      ok(statusChip(v, within).fill === fillOf[tier], `tier ${tier} matches chip colour for "${v}" / ${within}`);
+    }
+  }
+
+  // Re-eval rows: the tier is read off the comparison vocabulary.
+  eq(String(tierForComparisonRow({ status: "Out of Lab Range", withinLabRange: false })), "outside-lab", "re-eval lab-range -> red tier");
+  eq(String(tierForComparisonRow({ status: "Out of Optimal", withinLabRange: true })), "outside-optimal", "re-eval optimal -> amber tier");
+  eq(String(tierForComparisonRow({ status: "In Range", withinLabRange: true })), "optimal", "re-eval In Range -> green tier");
+  ok(tierForComparisonRow({ status: "Not retested", withinLabRange: null }) === null, "Not retested belongs to no tier");
+
+  // groupByTier: every tier present (even empty), tier order, row order kept.
+  const grouped = groupByTier(
+    [
+      { marker: "b", status: "OPTIMAL", withinLabRange: true },
+      { marker: "a", status: "HIGH", withinLabRange: false },
+      { marker: "c", status: "SUBOPTIMAL*", withinLabRange: true },
+      { marker: "d", status: "LOW", withinLabRange: false },
+    ],
+    tierForChartRow,
+  );
+  eq(grouped.map((g) => g.tier).join(","), "outside-lab,outside-optimal,optimal", "groupByTier returns the tiers in order");
+  eq(grouped[0].items.map((r) => r.marker).join(","), "a,d", "red tier keeps input order");
+  eq(grouped[1].items.map((r) => r.marker).join(","), "c", "amber tier");
+  eq(grouped[2].items.map((r) => r.marker).join(","), "b", "green tier");
+  const empties = groupByTier([{ marker: "x", status: "HIGH", withinLabRange: false }], tierForChartRow);
+  ok(empties.length === 3 && empties[1].items.length === 0 && empties[2].items.length === 0, "empty tiers are still returned");
+  ok(groupByTier([{ s: "Not retested" }], (r) => tierForComparisonRow({ status: r.s, withinLabRange: null })).every((g) => g.items.length === 0), "tierless rows are dropped from the tiers");
+
+  // ----- End to end through the engine: flagged rows + optimal rows -> tiers,
+  // with body-system order inside each tier -----
+  const matched = (canonicalName: string, value: number, unit: string, referenceRangeRaw: string): MatchedMarker => ({
+    rawName: canonicalName.toUpperCase(), canonicalName, value, unit, labFlagFromPdf: null, referenceRangeRaw,
+    referenceNoteRaw: null, optimalRange: null, matchStatus: "matched", matchConfidence: "exact",
+    confirmationPending: false, confirmationSource: null, source: "body", notes: [],
+  });
+  const flagged = flagMarkers(
+    [
+      matched("Glucose", 120, "mg/dL", "65-99"), // outside lab (high)
+      matched("Hemoglobin", 13.8, "g/dL", "11.1-15.9"), // optimal
+      matched("Vitamin D 25-OH", 31, "ng/mL", "30-100"), // in lab, below optimal
+      matched("Ferritin", 5, "ng/mL", "16-232"), // outside lab (low)
+      matched("Platelets", 250, "Thousand/uL", "140-400"), // optimal
+    ],
+    { sex: "female" },
+  );
+  const flaggedRows = buildChartRows(flagged);
+  const optimalRows = buildOptimalRows(flagged);
+  ok(flaggedRows.length === 3, `engine flags 3 of 5 (got ${flaggedRows.length}: ${flaggedRows.map((r) => r.marker).join(", ")})`);
+  ok(optimalRows.length === 2, `2 optimal rows (got ${optimalRows.length}: ${optimalRows.map((r) => r.marker).join(", ")})`);
+  ok(optimalRows.every((r) => r.status === "OPTIMAL" && r.withinLabRange === true), "optimal rows carry status OPTIMAL inside the lab range");
+  ok(optimalRows.every((r) => /\d/.test(r.result) && r.labRange !== "—"), "optimal rows carry a result and the lab range");
+  ok(!flaggedRows.some((r) => optimalRows.some((o) => o.marker === r.marker)), "no marker is both flagged and optimal");
+  const e2e = groupByTier([...flaggedRows, ...optimalRows], tierForChartRow);
+  eq(e2e[0].items.map((r) => r.marker).sort().join(","), "Ferritin,Glucose", "red tier: Ferritin + Glucose");
+  eq(e2e[1].items.map((r) => r.marker).join(","), "Vitamin D 25-OH", "amber tier: Vitamin D");
+  eq(e2e[2].items.map((r) => r.marker).sort().join(","), "Hemoglobin,Platelets", "green tier: Hemoglobin + Platelets");
+  // Body-system order is preserved inside a tier: groups come out in taxonomy
+  // order, and every row lands under its own system.
+  for (const g of e2e) {
+    const groups = groupBySystem(g.items, (r) => r.marker);
+    ok(groups.every((sg) => sg.items.every((r) => systemForMarker(r.marker) === sg.system)), `tier ${g.tier}: rows sit under their body system`);
+  }
 
   // Every chip line must fit the status column. The columns are sized for 16
   // characters at 9pt Arial bold; the direction is a separate line, never a wrap.

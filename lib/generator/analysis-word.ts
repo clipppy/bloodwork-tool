@@ -17,6 +17,13 @@
  *
  * The four LLM sections currently render labelled placeholders. Every number in
  * section 2 comes from lib/analysis/deterministic.ts, never from a model.
+ *
+ * Section 2 (and Part II of the re-eval) is grouped by SEVERITY TIER, worst
+ * first, matching the practitioner's validated layout: red = outside the lab
+ * reference range, amber = inside it but outside the functional optimal
+ * target, green = optimal ("What's Working"). Body system is the secondary
+ * order inside each tier. The tier is read off the deterministic status /
+ * withinLabRange the same way the chip colour is; nothing is re-flagged here.
  */
 
 import {
@@ -40,7 +47,7 @@ import {
   type ComparisonRow,
   type DeterministicAnalysis,
 } from "../analysis/deterministic";
-import { groupBySystem } from "../analysis/body-systems";
+import { groupBySystem, type BodySystemGroup } from "../analysis/body-systems";
 import {
   SYMPTOM_TAG_LABEL,
   type AnalysisNarrative,
@@ -66,7 +73,7 @@ const TREND_RED = "C00000";
 // enough to clear 4.5:1 contrast against white.
 const CHIP_LAB = "C00000"; // outside the standard lab range
 const CHIP_OPTIMAL = "B26A00"; // inside the lab range, outside the functional target
-const CHIP_IN_RANGE = "2E7D32"; // re-eval only: back inside both ranges
+const CHIP_IN_RANGE = "2E7D32"; // inside both ranges (green tier; re-eval "In Range")
 const CHIP_NEUTRAL = "6E6E6E"; // re-eval only: not retested / nothing to compare
 const CHIP_NEW = "4A5B6E"; // re-eval only: no prior value, so nothing to trend
 
@@ -217,22 +224,25 @@ function buildDocument(
       "2. Markers Outside Standard Lab Range and/or Functional Optimal Range",
     ),
   );
-  if (analysis.rows.length === 0) {
-    children.push(
-      new Paragraph({
-        spacing: { after: 200 },
-        children: [
-          runPlain(
-            "No markers fell outside the standard laboratory range or the functional optimal range on this panel.",
-          ),
-        ],
-      }),
-    );
-  } else {
-    children.push(buildChartLegend());
-    // One table per body system, in taxonomy order. Row content is untouched —
-    // only the headings and the split points are new.
-    for (const group of groupBySystem(analysis.rows, (r) => r.marker)) {
+  children.push(buildColorKey(false));
+  // Three severity tiers, worst first; body system is the order inside each.
+  // Flagged rows are untouched — only the split points are new. The green
+  // tier is the in-range markers, which the chart previously left out.
+  for (const { tier, items } of groupByTier(
+    [...analysis.rows, ...analysis.optimalRows],
+    tierForChartRow,
+  )) {
+    children.push(tierHeading(tier));
+    if (items.length === 0) {
+      children.push(tierEmptyNote(tier));
+      continue;
+    }
+    if (tier === "optimal") {
+      children.push(buildOptimalTable(groupBySystem(items, (r) => r.marker)));
+      children.push(blank());
+      continue;
+    }
+    for (const group of groupBySystem(items, (r) => r.marker)) {
       children.push(groupHeading(group.system));
       children.push(buildChartTable(group.items));
       children.push(blank());
@@ -425,34 +435,50 @@ function buildReevalDocument(
 
   // Part II — comparison chart (deterministic current side)
   children.push(sectionHeading("Part II: Marker Comparison — Out of Range Findings"));
-  children.push(buildLegend());
+  children.push(buildColorKey(true));
 
-  if (analysis.comparisonGroups.length === 0) {
-    children.push(
-      new Paragraph({
-        spacing: { after: 200 },
-        children: [
-          runPlain(
-            "No markers on the current panel fell outside the standard laboratory range or the functional optimal range.",
-          ),
-        ],
-      }),
-    );
-  } else {
-    // Re-grouped from the deterministic category buckets into the body-system
-    // taxonomy so both modes read the same way. Rows themselves are unchanged;
-    // alphabetical order inside a heading matches the previous per-category
-    // tables and keeps two runs over one panel byte-identical.
-    const comparisonRows = analysis.comparisonGroups.flatMap((g) => g.rows);
-    for (const group of groupBySystem(comparisonRows, (r) => r.marker)) {
+  // Same three severity tiers as the initial chart, worst first, with the
+  // body-system taxonomy as the order inside each so both modes read the same
+  // way. Comparison rows themselves are unchanged; alphabetical order inside a
+  // sub-label keeps two runs over one panel byte-identical. The green tier
+  // carries the back-in-range comparison rows (with their prior value and
+  // trend) and then, condensed, every other marker that is optimal now.
+  const comparisonRows = analysis.comparisonGroups.flatMap((g) => g.rows);
+  const byName = <T extends { marker: string }>(rows: T[]): T[] =>
+    rows.slice().sort((a, b) => a.marker.localeCompare(b.marker));
+  const inComparison = new Set(comparisonRows.map((r) => r.marker));
+  const notRetested = comparisonRows.filter((r) => tierForComparisonRow(r) === null);
+  for (const { tier, items } of groupByTier(comparisonRows, tierForComparisonRow)) {
+    children.push(tierHeading(tier));
+    const condensed =
+      tier === "optimal"
+        ? analysis.optimalRows.filter((r) => !inComparison.has(r.marker))
+        : [];
+    if (items.length === 0 && condensed.length === 0) {
+      children.push(tierEmptyNote(tier));
+      continue;
+    }
+    for (const group of groupBySystem(items, (r) => r.marker)) {
       children.push(groupHeading(group.system));
-      children.push(
-        buildComparisonTable(
-          group.items.slice().sort((a, b) => a.marker.localeCompare(b.marker)),
-        ),
-      );
+      children.push(buildComparisonTable(byName(group.items)));
       children.push(blank());
     }
+    if (condensed.length) {
+      if (items.length) {
+        children.push(groupHeading("Also within both ranges on this panel"));
+      }
+      children.push(buildOptimalTable(groupBySystem(condensed, (r) => r.marker)));
+      children.push(blank());
+    }
+  }
+  // Flagged on the prior report, absent from this draw: no tier applies.
+  if (notRetested.length) {
+    children.push(groupHeading("Not Retested on This Panel"));
+    children.push(buildComparisonTable(byName(notRetested)));
+    children.push(blank());
+  }
+
+  if (comparisonRows.length > 0) {
     children.push(...buildHormoneNotes(analysis));
     children.push(
       new Paragraph({
@@ -567,61 +593,165 @@ function buildReevalDocument(
   });
 }
 
-/** The sample's colour key, above the comparison tables. */
-function buildLegend(): Paragraph {
+/**
+ * Colour key above the chart: RED = outside the lab reference range, AMBER =
+ * inside the lab range but outside the functional optimal target, GREEN =
+ * optimal. The re-eval chart adds the New Finding chip its trend line uses.
+ */
+function buildColorKey(includeNewFinding: boolean): Paragraph {
+  const swatch = (text: string, fill: string) =>
+    new TextRun({
+      text: `  ${text}  `,
+      bold: true,
+      color: "FFFFFF",
+      size: 18,
+      font: "Arial",
+      shading: { fill, type: ShadingType.CLEAR, color: "auto" },
+    });
+  const meaning = (text: string) =>
+    new TextRun({ text, color: "000000", size: 18, font: "Arial" });
   return new Paragraph({
     spacing: { after: 160 },
     keepNext: true,
     children: [
-      runBold("Legend:  "),
-      new TextRun({
-        text: "  Out of Lab Range  ",
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-        shading: { fill: CHIP_LAB, type: ShadingType.CLEAR, color: "auto" },
-      }),
-      runPlain("   "),
-      new TextRun({
-        text: "  Out of Optimal  ",
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-        shading: { fill: CHIP_OPTIMAL, type: ShadingType.CLEAR, color: "auto" },
-      }),
-      runPlain("   "),
-      new TextRun({
-        text: "  In Range  ",
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-        shading: { fill: CHIP_IN_RANGE, type: ShadingType.CLEAR, color: "auto" },
-      }),
-      runPlain("   "),
-      new TextRun({
-        text: "  New Finding  ",
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-        shading: { fill: CHIP_NEW, type: ShadingType.CLEAR, color: "auto" },
-      }),
-      runItalic("     New Finding = no prior value to compare against.", GREY, 18),
+      runBold("Color key:  "),
+      swatch("RED", CHIP_LAB),
+      meaning(" = outside lab reference range     "),
+      swatch("AMBER", CHIP_OPTIMAL),
+      meaning(" = inside lab range but outside functional optimal     "),
+      swatch("GREEN", CHIP_IN_RANGE),
+      meaning(" = optimal"),
+      ...(includeNewFinding
+        ? [
+            meaning("     "),
+            swatch("New Finding", CHIP_NEW),
+            meaning(" = no prior value to compare against"),
+          ]
+        : []),
+      runItalic("     (High) / (Low) on a chip gives the direction.", GREY, 18),
     ],
   });
 }
 
-/** Body-system heading. keepNext binds it to the table that follows so a
- *  heading can never strand alone at the foot of a page. */
-function groupHeading(label: string): Paragraph {
+// ----- Severity tiers -----
+
+/** The chart's primary grouping: where the value sits, worst first. Body
+ *  system is the secondary order inside each tier. */
+export type ChartTier = "outside-lab" | "outside-optimal" | "optimal";
+
+export const CHART_TIERS: readonly ChartTier[] = ["outside-lab", "outside-optimal", "optimal"];
+
+export const TIER_LABELS: Readonly<Record<ChartTier, string>> = {
+  "outside-lab": "Outside Lab Reference Range",
+  "outside-optimal": "Inside Lab Range, Outside Functional Optimal",
+  optimal: "Optimal — What's Working",
+};
+
+const TIER_FILLS: Readonly<Record<ChartTier, string>> = {
+  "outside-lab": CHIP_LAB,
+  "outside-optimal": CHIP_OPTIMAL,
+  optimal: CHIP_IN_RANGE,
+};
+
+const TIER_EMPTY_NOTES: Readonly<Record<ChartTier, string>> = {
+  "outside-lab": "No markers fell outside the lab reference range on this panel.",
+  "outside-optimal":
+    "No markers sat inside the lab range but outside the functional optimal target on this panel.",
+  optimal:
+    "No markers fell within both the lab reference range and the functional optimal target on this panel.",
+};
+
+/**
+ * Tier of an initial-mode chart row. The same rule as the chip's colour:
+ * provably inside the lab range -> amber tier; outside it, or no usable lab
+ * range to compare against -> red tier. A row whose deterministic status is
+ * OPTIMAL (from `optimalRows`) is the green tier.
+ */
+export function tierForChartRow(row: Pick<ChartRow, "status" | "withinLabRange">): ChartTier {
+  const key = (row.status ?? "").replace(/\*+$/, "").trim().toUpperCase();
+  if (key === "OPTIMAL") return "optimal";
+  return row.withinLabRange === true ? "outside-optimal" : "outside-lab";
+}
+
+/**
+ * Tier of a re-eval comparison row, read off its deterministic status wording
+ * (comparisonStatus / the merge's "In Range"). A "Not retested" row — flagged
+ * on the prior report, absent from this draw — belongs to no tier: null.
+ */
+export function tierForComparisonRow(
+  row: Pick<ComparisonRow, "status" | "withinLabRange">,
+): ChartTier | null {
+  const key = (row.status ?? "").trim().toUpperCase();
+  if (key === "OUT OF LAB RANGE") return "outside-lab";
+  if (key === "OUT OF OPTIMAL") return "outside-optimal";
+  if (key === "IN RANGE") return "optimal";
+  if (key === "NOT RETESTED") return null;
+  return row.withinLabRange === true ? "outside-optimal" : "outside-lab";
+}
+
+export interface TierGroup<T> {
+  tier: ChartTier;
+  items: T[];
+}
+
+/**
+ * Split rows into the three tiers, in tier order, keeping each row's relative
+ * order inside its tier. Every tier is returned even when empty, so the
+ * document always prints all three headings; rows with no tier are dropped
+ * (the caller renders them separately).
+ */
+export function groupByTier<T>(
+  items: readonly T[],
+  tierOf: (item: T) => ChartTier | null,
+): Array<TierGroup<T>> {
+  const buckets = new Map<ChartTier, T[]>(CHART_TIERS.map((t) => [t, []]));
+  for (const item of items) {
+    const tier = tierOf(item);
+    if (tier) buckets.get(tier)!.push(item);
+  }
+  return CHART_TIERS.map((tier) => ({ tier, items: buckets.get(tier)! }));
+}
+
+/** Tier heading: a swatch in the tier's colour, then the label. keepNext
+ *  binds it to whatever follows so it never strands at the foot of a page. */
+function tierHeading(tier: ChartTier): Paragraph {
   return new Paragraph({
-    spacing: { before: 240, after: 100 },
+    spacing: { before: 320, after: 80 },
     keepNext: true,
     children: [
-      new TextRun({ text: label, bold: true, color: NAVY, size: 22, font: "Arial" }),
+      new TextRun({
+        text: "     ",
+        size: 24,
+        font: "Arial",
+        shading: { fill: TIER_FILLS[tier], type: ShadingType.CLEAR, color: "auto" },
+      }),
+      new TextRun({
+        text: `  ${TIER_LABELS[tier]}`,
+        bold: true,
+        color: NAVY,
+        size: 24,
+        font: "Arial",
+      }),
+    ],
+  });
+}
+
+function tierEmptyNote(tier: ChartTier): Paragraph {
+  return new Paragraph({
+    spacing: { after: 160 },
+    children: [runItalic(TIER_EMPTY_NOTES[tier], GREY, 18)],
+  });
+}
+
+/** Body-system sub-label inside a tier: lighter than the tier heading so the
+ *  tier reads as the primary grouping. keepNext binds it to the table that
+ *  follows so a label can never strand alone at the foot of a page. */
+function groupHeading(label: string): Paragraph {
+  return new Paragraph({
+    spacing: { before: 160, after: 80 },
+    keepNext: true,
+    children: [
+      new TextRun({ text: label, bold: true, color: TEAL, size: 20, font: "Arial" }),
     ],
   });
 }
@@ -645,8 +775,8 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
       chartHeaderCell("Marker", RC_MARKER, shading),
       chartHeaderCell("Prior Panel (from prior report)", RC_PRIOR, shading),
       chartHeaderCell("Current", RC_CURRENT, shading),
-      chartHeaderCell("Lab Range", RC_LAB, shading),
-      chartHeaderCell("Functional Optimal", RC_OPTIMAL, shading),
+      chartHeaderCell("Lab Reference Range", RC_LAB, shading),
+      chartHeaderCell("Functional/Optimal Target", RC_OPTIMAL, shading),
       chartHeaderCell("Status", RC_STATUS, shading),
     ],
   });
@@ -904,7 +1034,12 @@ function buildSalivaCortisolSection(
           chartCell(formatCortisolResult(s), CX_RESULT, { bold: true }),
           chartCell(s.rangeText, CX_WINDOW),
           chipCell(
-            statusChip(cortisolStatusWord(s.status), s.status === "in-range"),
+            // Saliva cortisol has a reference window but no functional tier, so
+            // an in-window sample reads "In Range" (green), not the blood
+            // chart's "Optimal".
+            s.status === "in-range"
+              ? statusChip("In Range", true)
+              : statusChip(cortisolStatusWord(s.status), false),
             CX_STATUS,
           ),
         ],
@@ -1188,7 +1323,8 @@ export function statusChip(
     case "OUT OF RANGE":
       return { label, direction, fill };
     case "OPTIMAL":
-      return { label: "In Range", direction: "", fill: CHIP_IN_RANGE };
+      // The green tier's own rows: inside both ranges.
+      return { label: "Optimal", direction: "", fill: CHIP_IN_RANGE };
     default: {
       // Unknown vocabulary still prints, in Title Case, rather than vanishing.
       const fallback = raw
@@ -1244,39 +1380,6 @@ function chipParagraph(chip: StatusChip): Paragraph {
   });
 }
 
-/** Colour key for the status chips, printed under the section 2 heading. */
-function buildChartLegend(): Paragraph {
-  return new Paragraph({
-    spacing: { after: 160 },
-    keepNext: true,
-    children: [
-      runBold("Status key:  "),
-      new TextRun({
-        text: "  Out of Lab Range  ",
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-        shading: { fill: CHIP_LAB, type: ShadingType.CLEAR, color: "auto" },
-      }),
-      runPlain("   "),
-      new TextRun({
-        text: "  Out of Optimal  ",
-        bold: true,
-        color: "FFFFFF",
-        size: 18,
-        font: "Arial",
-        shading: { fill: CHIP_OPTIMAL, type: ShadingType.CLEAR, color: "auto" },
-      }),
-      runItalic(
-        "     Red = outside the standard lab range. Amber = inside the lab range but outside the functional optimal range. (High) / (Low) gives the direction.",
-        GREY,
-        18,
-      ),
-    ],
-  });
-}
-
 // ----- Section 2 chart -----
 
 function buildChartTable(rows: ChartRow[]): Table {
@@ -1286,8 +1389,8 @@ function buildChartTable(rows: ChartRow[]): Table {
     children: [
       chartHeaderCell("Marker", COL_MARKER, shading),
       chartHeaderCell("Result", COL_RESULT, shading),
-      chartHeaderCell("Standard Lab Range", COL_LAB, shading),
-      chartHeaderCell("Functional / Optimal Range", COL_OPTIMAL, shading),
+      chartHeaderCell("Lab Reference Range", COL_LAB, shading),
+      chartHeaderCell("Functional/Optimal Target", COL_OPTIMAL, shading),
       chartHeaderCell("Status", COL_STATUS, shading),
     ],
   });
@@ -1312,6 +1415,115 @@ function buildChartTable(rows: ChartRow[]): Table {
     width: { size: CONTENT_WIDTH, type: WidthType.DXA },
     columnWidths: CHART_GRID,
     rows: [head, ...body],
+  });
+}
+
+/**
+ * The green tier, condensed: one table for every in-range marker, with a
+ * shaded body-system label row between groups instead of a table per system.
+ * Smaller type and tighter rows than the flagged tables — these markers need
+ * no interpretation yet, so they take less room. Same five columns and grid.
+ */
+function buildOptimalTable(groups: Array<BodySystemGroup<ChartRow>>): Table {
+  const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
+  const head = new TableRow({
+    tableHeader: true,
+    children: [
+      chartHeaderCell("Marker", COL_MARKER, shading),
+      chartHeaderCell("Result", COL_RESULT, shading),
+      chartHeaderCell("Lab Reference Range", COL_LAB, shading),
+      chartHeaderCell("Functional/Optimal Target", COL_OPTIMAL, shading),
+      chartHeaderCell("Status", COL_STATUS, shading),
+    ],
+  });
+
+  const rows: TableRow[] = [head];
+  for (const group of groups) {
+    rows.push(
+      new TableRow({
+        cantSplit: true,
+        children: [
+          new TableCell({
+            columnSpan: CHART_GRID.length,
+            borders: bordersAll(),
+            width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+            shading: { fill: "F2F2F2", type: ShadingType.CLEAR, color: "auto" },
+            margins: { top: 40, bottom: 40, left: 120, right: 120 },
+            children: [
+              new Paragraph({
+                keepNext: true,
+                children: [
+                  new TextRun({ text: group.system, bold: true, color: TEAL, size: 18, font: "Arial" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    for (const r of group.items) {
+      rows.push(
+        new TableRow({
+          cantSplit: true,
+          children: [
+            condensedCell(shortMarkerName(r.marker), COL_MARKER, { bold: true }),
+            condensedCell(r.result, COL_RESULT),
+            condensedCell(r.labRange, COL_LAB),
+            condensedCell(displayOptimalRange(r.labRange, r.optimalRange), COL_OPTIMAL),
+            condensedChipCell(statusChip(r.status, r.withinLabRange), COL_STATUS),
+          ],
+        }),
+      );
+    }
+  }
+
+  return new Table({
+    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: CHART_GRID,
+    rows,
+  });
+}
+
+function condensedCell(
+  text: string,
+  width: number,
+  opts: { bold?: boolean } = {},
+): TableCell {
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    margins: { top: 40, bottom: 40, left: 120, right: 120 },
+    children: [
+      new Paragraph({
+        children: [
+          new TextRun({
+            text,
+            bold: opts.bold ?? false,
+            color: "000000",
+            size: 18,
+            font: "Arial",
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
+/** Chip cell at the condensed row height. */
+function condensedChipCell(chip: StatusChip, width: number): TableCell {
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    shading: { fill: chip.fill, type: ShadingType.CLEAR, color: "auto" },
+    margins: { top: 40, bottom: 40, left: 80, right: 80 },
+    children: [
+      new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [
+          new TextRun({ text: chip.label, bold: true, color: "FFFFFF", size: 16, font: "Arial" }),
+        ],
+      }),
+    ],
   });
 }
 
