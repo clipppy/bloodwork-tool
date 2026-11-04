@@ -11,12 +11,16 @@
  * Run: npx tsx lib/generator/analysis-format.test.ts  (or: npm run test:analysis-format)
  */
 
+import mammoth from "mammoth";
 import {
   CHART_TIERS,
   TIER_LABELS,
   shortMarkerName,
   displayOptimalRange,
+  generateAnalysisReport,
+  generateReevalReport,
   groupByTier,
+  noteFor,
   statusChip,
   tierForChartRow,
   tierForComparisonRow,
@@ -24,8 +28,15 @@ import {
 import { OPTIMAL_RANGES } from "../ranges/optimal-ranges";
 import type { MatchedMarker } from "../matcher";
 import { flagMarkers } from "../flagging";
-import { buildChartRows, buildOptimalRows } from "../analysis/deterministic";
+import {
+  buildChartRows,
+  buildDeterministicAnalysis,
+  buildOptimalRows,
+} from "../analysis/deterministic";
 import { groupBySystem, systemForMarker } from "../analysis/body-systems";
+import { toAnalysisNarrative, toReevalNarrative } from "../analysis/prompt";
+import { buildPayload, serializePayload, assertNoIdentifiers } from "../analysis/deidentify";
+import type { InitialNarrativeJson, ReevalNarrativeJson } from "../analysis/schemas";
 
 let passed = 0;
 const failures: string[] = [];
@@ -287,6 +298,130 @@ function main() {
     }
   }
 
+  // ----- noteFor: join by canonical name, tolerant of harmless respellings -----
+  const notes = new Map([
+    ["Glucose", "Glucose note."],
+    ["MCV (Mean Corpuscular Volume)", "MCV note."],
+    ["ferritin", "Ferritin note."],
+  ]);
+  eq(noteFor(notes, "Glucose"), "Glucose note.", "exact canonical name joins");
+  eq(noteFor(notes, "MCV (Mean Corpuscular Volume)"), "MCV note.", "exact long name joins");
+  eq(noteFor(notes, "Ferritin"), "Ferritin note.", "case-insensitive name joins");
+  eq(noteFor(new Map([["MCV", "short note."]]), "MCV (Mean Corpuscular Volume)"), "short note.", "short display name joins");
+  eq(noteFor(notes, "Hemoglobin"), "", "no note -> blank, never an error");
+  eq(noteFor(new Map(), "Glucose"), "", "empty map -> blank");
+
+  // ----- End to end: the document joins each note to its own row -----
+  return renderChecks().then(() => finish());
+}
+
+async function renderChecks() {
+  const matched = (canonicalName: string, value: number, unit: string, referenceRangeRaw: string): MatchedMarker => ({
+    rawName: canonicalName.toUpperCase(), canonicalName, value, unit, labFlagFromPdf: null, referenceRangeRaw,
+    referenceNoteRaw: null, optimalRange: null, matchStatus: "matched", matchConfidence: "exact",
+    confirmationPending: false, confirmationSource: null, source: "body", notes: [],
+  });
+  const flagged = flagMarkers(
+    [
+      matched("Glucose", 120, "mg/dL", "65-99"), // tier A
+      matched("Ferritin", 5, "ng/mL", "16-232"), // tier A
+      matched("Vitamin D 25-OH", 31, "ng/mL", "30-100"), // tier B
+      matched("Hemoglobin", 13.8, "g/dL", "11.1-15.9"), // tier C
+    ],
+    { sex: "female" },
+  );
+  const analysis = buildDeterministicAnalysis(flagged, {
+    patientName: "Jane Q Doe",
+    patientDate: "2026-04-10",
+    dob: "1980-01-02",
+    sex: "female",
+  });
+  const GLUCOSE_NOTE = "Glucose is the sugar in your blood. Yours is running higher than we like to see.";
+  const VITD_NOTE = "Vitamin D is the sunshine vitamin. Yours is in range but lower than ideal for energy and immune health.";
+  const pattern = { pattern: "Blood sugar drifting up", bullets: ["Your fasting sugar is higher than we like to see."], symptomTags: [], relevanceToChiefConcern: "Fits the afternoon dip." };
+  const phase = { phase: "Phase 1 - Foundation (Weeks 1-4)", goal: "Stabilize.", bullets: ["Protein-forward breakfast."] };
+  const summary = { whatsGoingWell: "Much of this looks solid.", likelyDrivers: "Blood sugar swings.", planInPlainLanguage: "Breakfast first, then retest." };
+  // Ferritin deliberately has NO note; the cell must simply be blank.
+  const initialJson: InitialNarrativeJson = {
+    chiefConcern: "persistent fatigue",
+    clinicalPresentation: ["Reports afternoon fatigue."],
+    reassuringNarrative: "Hemoglobin (13.8 g/dL) argues against anemia.",
+    rootCauseAnalysis: [pattern],
+    phasedProtocol: [phase],
+    patientSummary: summary,
+    markerInterpretations: [
+      { marker: "Glucose", note: GLUCOSE_NOTE },
+      { marker: "Vitamin D 25-OH", note: VITD_NOTE },
+    ],
+  };
+  const text = async (buf: Buffer) => (await mammoth.extractRawText({ buffer: buf })).value;
+
+  const doc = await text(await generateAnalysisReport(analysis, toAnalysisNarrative(initialJson)));
+  ok(doc.includes("2. Lab Findings by Severity"), "docx: section 2 heading renamed");
+  ok(!doc.includes("Markers Outside Standard Lab Range"), "docx: old section 2 heading gone");
+  ok(doc.includes("Interpretation"), "docx: Interpretation column header present");
+  ok(doc.includes(GLUCOSE_NOTE) && doc.includes(VITD_NOTE), "docx: both notes rendered");
+  // Row order in the extracted text: a note sits after its own marker and
+  // before the next marker's name, so it is in that marker's row.
+  const chartText = doc.slice(doc.indexOf("2. Lab Findings by Severity"), doc.indexOf("3. Root Cause Analysis"));
+  const at = (needle: string) => chartText.indexOf(needle);
+  // A note is in its marker's row when it follows that marker's name with no
+  // other marker's name in between.
+  const inRowOf = (text: string, marker: string, note: string, others: string[]) => {
+    const m = text.indexOf(marker);
+    const n = text.indexOf(note);
+    if (m < 0 || n < m) return false;
+    const between = text.slice(m + marker.length, n);
+    return others.every((o) => !between.includes(o));
+  };
+  ok(inRowOf(chartText, "Glucose", GLUCOSE_NOTE, ["Ferritin", "Vitamin D", "Hemoglobin"]), "docx: Glucose note sits in the Glucose row");
+  ok(inRowOf(chartText, "Vitamin D", VITD_NOTE, ["Ferritin", "Glucose", "Hemoglobin"]), "docx: Vitamin D note sits in the Vitamin D row");
+  ok(at("Ferritin") >= 0 && !chartText.slice(at("Ferritin"), at("Glucose")).includes("note"), "docx: Ferritin (no note) renders with a blank cell");
+  ok(at(GLUCOSE_NOTE) < at(TIER_LABELS["outside-optimal"]) && at(VITD_NOTE) > at(TIER_LABELS["outside-optimal"]), "docx: notes stay inside their tiers");
+  ok(at("Hemoglobin") > at(TIER_LABELS.optimal), "docx: in-range marker is in the green tier, with no note column");
+  ok(!doc.includes("Reassuring markers within both standard and functional optimal ranges"), "docx: old reassuring paragraph block removed");
+  ok(!doc.includes("All other markers within range"), "docx: old 'all other markers' line removed");
+  ok(doc.includes("argues against anemia"), "docx: the model's reassuring narrative paragraph is kept");
+  ok(doc.includes("3. Root Cause Analysis") && doc.includes("Blood sugar drifting up"), "docx: section 3 root cause is still rendered (notes are additive)");
+
+  // Without a narrative every Interpretation cell is blank and nothing throws.
+  const bare = await text(await generateAnalysisReport(analysis, null));
+  ok(bare.includes("Interpretation") && !bare.includes(GLUCOSE_NOTE), "docx: placeholder document has the column, blank cells");
+
+  // Re-eval: same join, on the comparison rows.
+  const reevalJson: ReevalNarrativeJson = {
+    chiefConcern: "persistent fatigue",
+    priorMarkers: [{ name: "Glucose", priorValue: "112 mg/dL", comparable: true }],
+    overview: ["The prior panel flagged glucose."],
+    comparativeRootCause: [pattern],
+    updatedProtocol: [{ ...phase, bullets: ["CONTINUE: protein-forward breakfast."] }],
+    alreadyImproving: [],
+    backgroundFindings: [],
+    patientSummary: summary,
+    markerInterpretations: [{ marker: "Glucose", note: GLUCOSE_NOTE }],
+  };
+  const reeval = await text(await generateReevalReport(analysis, true, toReevalNarrative(reevalJson), "2025-10-01"));
+  ok(reeval.includes("Part II: Lab Findings by Severity"), "reeval docx: Part II heading renamed");
+  ok(reeval.includes("Interpretation") && reeval.includes(GLUCOSE_NOTE), "reeval docx: note joined to the comparison row");
+  const partII = reeval.slice(reeval.indexOf("Part II"), reeval.indexOf("Part III"));
+  ok(inRowOf(partII, "Glucose", GLUCOSE_NOTE, ["Ferritin", "Vitamin D", "Hemoglobin"]), "reeval docx: Glucose note in the Glucose row");
+
+  // The de-identified payload is built from the engine output only: the
+  // notes never flow into it, and the identifier guard still passes.
+  const payload = buildPayload(flagged, { age: 46, sex: "female", intake: "Jane Q Doe reports fatigue.", patientName: "Jane Q Doe", dob: "1980-01-02" });
+  const serialized = serializePayload(payload);
+  let threw = false;
+  try {
+    assertNoIdentifiers(serialized, { patientName: "Jane Q Doe", dob: "1980-01-02" });
+  } catch {
+    threw = true;
+  }
+  ok(!threw, "payload: identifier guard still passes");
+  ok(!serialized.includes(GLUCOSE_NOTE) && !("markerInterpretations" in payload), "payload: notes are output, never input");
+  ok(payload.flaggedMarkers.map((m) => m.name).sort().join(",") === "Ferritin,Glucose,Vitamin D 25-OH", "payload: flaggedMarkers = tiers A + B, the set the notes cover");
+}
+
+function finish() {
   if (failures.length > 0) {
     console.error(`\nanalysis-format: ${failures.length} FAILED, ${passed} passed\n`);
     console.error(failures.join("\n"));

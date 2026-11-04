@@ -264,6 +264,7 @@ const initialJson: InitialNarrativeJson = {
   rootCauseAnalysis: [pattern],
   phasedProtocol: [phase],
   patientSummary: summary,
+  markerInterpretations: [],
 };
 {
   const n0 = toAnalysisNarrative(initialJson);
@@ -286,6 +287,7 @@ const initialJson: InitialNarrativeJson = {
     alreadyImproving: [],
     backgroundFindings: [],
     patientSummary: summary,
+    markerInterpretations: [],
     cortisolInterpretation: ["Flat curve."],
   };
   ok(toReevalNarrative(reevalJson).cortisol.length === 1, "re-eval narrative: reads the field");

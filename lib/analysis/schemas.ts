@@ -94,6 +94,42 @@ const phaseBlock = (bulletsDescription: string) => ({
   additionalProperties: false,
 });
 
+// Shared by both modes: the chart's inline "What This Means" column. One entry
+// per flagged marker (tiers A and B), joined to its chart row by canonical
+// name. The in-range tier needs no note.
+const markerInterpretationsField = (markerField: string) => ({
+  type: "array" as const,
+  description:
+    `One entry for EVERY marker in \`${markerField}\`, in any order. Each note is ` +
+    "one or two plain-language sentences for the patient: what the marker is, " +
+    "and what being out of range means for them in practical terms. No jargon, " +
+    "no diagnosis, no numbers, no identifiers.",
+  items: {
+    type: "object" as const,
+    properties: {
+      marker: {
+        type: "string" as const,
+        description: `The marker's \`name\` copied verbatim from \`${markerField}\`.`,
+      },
+      note: {
+        type: "string" as const,
+        description:
+          "One or two short sentences in the practitioner's patient-facing voice, " +
+          "e.g. \"LDL is the 'sticky' cholesterol that can build up inside artery " +
+          "walls. Hers is in the high zone - the biggest risk factor we can actually " +
+          "change.\" Plain words, no values, no ranges, no diagnosis.",
+      },
+    },
+    required: ["marker", "note"],
+    additionalProperties: false,
+  },
+});
+
+export interface MarkerInterpretationJson {
+  marker: string;
+  note: string;
+}
+
 // ----- Initial mode -----
 
 export const INITIAL_NARRATIVE_SCHEMA = {
@@ -128,6 +164,7 @@ export const INITIAL_NARRATIVE_SCHEMA = {
       ),
     },
     patientSummary: patientSummaryBlock,
+    markerInterpretations: markerInterpretationsField("flaggedMarkers"),
   },
   required: [
     "chiefConcern",
@@ -136,6 +173,7 @@ export const INITIAL_NARRATIVE_SCHEMA = {
     "rootCauseAnalysis",
     "phasedProtocol",
     "patientSummary",
+    "markerInterpretations",
   ],
   additionalProperties: false,
 } as const;
@@ -206,6 +244,8 @@ export interface InitialNarrativeJson {
   rootCauseAnalysis: PatternJson[];
   phasedProtocol: Array<{ phase: string; goal: string; bullets: string[] }>;
   patientSummary: PatientSummaryJson;
+  /** Inline chart notes, one per flagged marker, keyed by canonical name. */
+  markerInterpretations: MarkerInterpretationJson[];
   /** Present only when the schema was built with { cortisol: true }. */
   cortisolInterpretation?: string[];
 }
@@ -281,6 +321,7 @@ export const REEVAL_NARRATIVE_SCHEMA = {
         "draw re-tested everything the prior report flagged.",
     ),
     patientSummary: patientSummaryBlock,
+    markerInterpretations: markerInterpretationsField("currentFlaggedMarkers"),
   },
   required: [
     "chiefConcern",
@@ -291,6 +332,7 @@ export const REEVAL_NARRATIVE_SCHEMA = {
     "alreadyImproving",
     "backgroundFindings",
     "patientSummary",
+    "markerInterpretations",
   ],
   additionalProperties: false,
 } as const;
@@ -304,6 +346,8 @@ export interface ReevalNarrativeJson {
   alreadyImproving: string[];
   backgroundFindings: string[];
   patientSummary: PatientSummaryJson;
+  /** Inline chart notes, one per currently flagged marker. */
+  markerInterpretations: MarkerInterpretationJson[];
   /** Present only when the schema was built with { cortisol: true }. */
   cortisolInterpretation?: string[];
 }

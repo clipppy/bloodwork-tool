@@ -9,7 +9,8 @@
  *   Header block (patient, dates, practice)  <- identifiers merged in LOCALLY
  *   Decision-support disclaimer
  *   1. Clinical Presentation Summary         <- LLM (Phase 1b)
- *   2. Markers Outside Standard Lab Range... <- DETERMINISTIC (this file)
+ *   2. Lab Findings by Severity (chart)     <- DETERMINISTIC rows (this file)
+ *                                             + LLM per-marker Interpretation notes
  *   3. Root Cause Analysis by Marker/Pattern <- LLM (Phase 1b)
  *   4. Phased Functional Medicine Protocol   <- LLM (Phase 1b)
  *   5. Summary of Findings - In Plain Language <- LLM (Phase 1b)
@@ -24,6 +25,12 @@
  * target, green = optimal ("What's Working"). Body system is the secondary
  * order inside each tier. The tier is read off the deterministic status /
  * withinLabRange the same way the chip colour is; nothing is re-flagged here.
+ *
+ * The chart prints in its own LANDSCAPE section (the practitioner's wide
+ * format) so the Interpretation column - the model's one-or-two-sentence
+ * plain-language note per flagged marker, joined to its row by canonical name -
+ * has room to read. A marker with no note gets a blank cell, never an error.
+ * The in-range tier carries no notes.
  */
 
 import {
@@ -38,6 +45,8 @@ import {
   BorderStyle,
   WidthType,
   ShadingType,
+  PageOrientation,
+  type ISectionOptions,
 } from "docx";
 import {
   DISCLAIMER,
@@ -82,21 +91,34 @@ const PAGE_HEIGHT = 15840;
 const PAGE_MARGIN = 1440;
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2; // 9360
 
-// Chart column widths, summing to CONTENT_WIDTH.
-//
-// These same numbers go into the table's `columnWidths` as well as each cell's
-// `width`. Without columnWidths the docx writer emits a tblGrid of 100-twip
-// columns; Word happens to re-fit from the cell widths, but every other
-// renderer (Pages, LibreOffice, Google Docs, most PDF converters) honours the
-// grid and squeezes the table into an unreadable mess. The grid is the fix.
-const COL_MARKER = 1900;
-const COL_RESULT = 2000;
-const COL_LAB = 1700;
-const COL_OPTIMAL = 1760;
-// Wide enough for the longest chip label ("Out of Lab Range") on one line; the
-// direction sits on its own second line, so nothing ever breaks mid-word.
-const COL_STATUS = 2000;
-const CHART_GRID = [COL_MARKER, COL_RESULT, COL_LAB, COL_OPTIMAL, COL_STATUS];
+// Column widths: every table's numbers go into its `columnWidths` as well as
+// each cell's `width`, and sum to the section's content width. Without
+// columnWidths the docx writer emits a tblGrid of 100-twip columns; Word
+// happens to re-fit from the cell widths, but every other renderer (Pages,
+// LibreOffice, Google Docs, most PDF converters) honours the grid and squeezes
+// the table into an unreadable mess. The grid is the fix.
+
+// The chart section is landscape: the same sheet turned, same margins.
+const LANDSCAPE_CONTENT_WIDTH = PAGE_HEIGHT - PAGE_MARGIN * 2; // 12960
+
+// Tier A/B chart in landscape, with the Interpretation column widest. The
+// range columns hold "Reference" on one line; Status fits the longest chip
+// label ("Out of Lab Range") on one line, the direction on its own line.
+const LC_MARKER = 1500;
+const LC_RESULT = 1400;
+const LC_LAB = 1500;
+const LC_OPTIMAL = 1500;
+const LC_STATUS = 2000;
+const LC_NOTE = 5060;
+const LANDSCAPE_CHART_GRID = [LC_MARKER, LC_RESULT, LC_LAB, LC_OPTIMAL, LC_STATUS, LC_NOTE];
+
+// Condensed in-range table in landscape: five columns, no notes.
+const LO_MARKER = 2600;
+const LO_RESULT = 2600;
+const LO_LAB = 2400;
+const LO_OPTIMAL = 2400;
+const LO_STATUS = 2960;
+const LANDSCAPE_OPTIMAL_GRID = [LO_MARKER, LO_RESULT, LO_LAB, LO_OPTIMAL, LO_STATUS];
 
 // Header block: label/value twice across.
 const HDR_LABEL = 1900;
@@ -153,7 +175,12 @@ function buildDocument(
   analysis: DeterministicAnalysis,
   narrative: AnalysisNarrative | null,
 ): Document {
-  const children: Array<Paragraph | Table> = [];
+  // Three docx sections: portrait up to the chart, the chart in landscape,
+  // portrait from the cortisol table onwards. `children` is re-pointed at each.
+  const before: Array<Paragraph | Table> = [];
+  const chart: Array<Paragraph | Table> = [];
+  const after: Array<Paragraph | Table> = [];
+  let children = before;
 
   // Title block
   children.push(
@@ -218,16 +245,14 @@ function buildDocument(
         ]),
   );
 
-  // 2. Markers chart — DETERMINISTIC
-  children.push(
-    sectionHeading(
-      "2. Markers Outside Standard Lab Range and/or Functional Optimal Range",
-    ),
-  );
+  // 2. Chart — DETERMINISTIC rows + LLM interpretation notes (landscape)
+  children = chart;
+  children.push(sectionHeading("2. Lab Findings by Severity"));
   children.push(buildColorKey(false));
   // Three severity tiers, worst first; body system is the order inside each.
   // Flagged rows are untouched — only the split points are new. The green
   // tier is the in-range markers, which the chart previously left out.
+  const notes = narrative ? narrative.markerNotes : EMPTY_NOTES;
   for (const { tier, items } of groupByTier(
     [...analysis.rows, ...analysis.optimalRows],
     tierForChartRow,
@@ -244,17 +269,20 @@ function buildDocument(
     }
     for (const group of groupBySystem(items, (r) => r.marker)) {
       children.push(groupHeading(group.system));
-      children.push(buildChartTable(group.items));
+      children.push(buildChartTable(group.items, notes));
       children.push(blank());
     }
   }
   children.push(...buildHormoneNotes(analysis));
+
+  // Back to portrait: the cortisol table has its own portrait grid.
+  children = after;
   // Salivary cortisol (when a saliva report was uploaded), with the endocrine
   // findings; the model's diurnal reading sits under its own table.
   children.push(...buildSalivaCortisolSection(analysis, narrative ? narrative.cortisol : null));
-  // Narrative reading of the in-range markers (LLM), after the code-built list.
+  // Narrative reading of the in-range markers (LLM). The code-built list of
+  // in-range markers that used to follow it is now the chart's green tier.
   if (narrative) children.push(...renderBlocks(narrative.reassuring));
-  children.push(...buildReassuringParagraphs(analysis));
 
   // 3. Root Cause Analysis — LLM
   children.push(sectionHeading("3. Root Cause Analysis by Marker/Pattern"));
@@ -312,22 +340,44 @@ function buildDocument(
     title: "Functional Medicine Lab Analysis",
     description: "Clinical correlation and phased protocol recommendations",
     sections: [
-      {
-        properties: {
-          page: {
-            size: { width: PAGE_WIDTH, height: PAGE_HEIGHT },
-            margin: {
-              top: PAGE_MARGIN,
-              right: PAGE_MARGIN,
-              bottom: PAGE_MARGIN,
-              left: PAGE_MARGIN,
-            },
-          },
-        },
-        children,
-      },
+      docSection(before, "portrait"),
+      docSection(chart, "landscape"),
+      docSection(after, "portrait"),
     ],
   });
+}
+
+/** No narrative (placeholder document): every Interpretation cell is blank. */
+const EMPTY_NOTES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * One docx section. A section break always starts a new page, so the chart
+ * opens on its own landscape page and the prose resumes on a portrait one.
+ * Same margins either way; docx swaps width/height for landscape itself.
+ */
+function docSection(
+  children: Array<Paragraph | Table>,
+  orientation: "portrait" | "landscape",
+): ISectionOptions {
+  return {
+    properties: {
+      page: {
+        size: {
+          width: PAGE_WIDTH,
+          height: PAGE_HEIGHT,
+          orientation:
+            orientation === "landscape" ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT,
+        },
+        margin: {
+          top: PAGE_MARGIN,
+          right: PAGE_MARGIN,
+          bottom: PAGE_MARGIN,
+          left: PAGE_MARGIN,
+        },
+      },
+    },
+    children,
+  };
 }
 
 // ----- Re-evaluation document -----
@@ -338,7 +388,10 @@ function buildReevalDocument(
   narrative: ReevalNarrative | null,
   priorPanelDate: string | null,
 ): Document {
-  const children: Array<Paragraph | Table> = [];
+  const before: Array<Paragraph | Table> = [];
+  const chart: Array<Paragraph | Table> = [];
+  const after: Array<Paragraph | Table> = [];
+  let children = before;
   const h = analysis.header;
 
   children.push(
@@ -433,9 +486,11 @@ function buildReevalDocument(
         ]),
   );
 
-  // Part II — comparison chart (deterministic current side)
-  children.push(sectionHeading("Part II: Marker Comparison — Out of Range Findings"));
+  // Part II — comparison chart (deterministic current side), landscape
+  children = chart;
+  children.push(sectionHeading("Part II: Lab Findings by Severity — Marker Comparison"));
   children.push(buildColorKey(true));
+  const notes = narrative ? narrative.markerNotes : EMPTY_NOTES;
 
   // Same three severity tiers as the initial chart, worst first, with the
   // body-system taxonomy as the order inside each so both modes read the same
@@ -460,7 +515,7 @@ function buildReevalDocument(
     }
     for (const group of groupBySystem(items, (r) => r.marker)) {
       children.push(groupHeading(group.system));
-      children.push(buildComparisonTable(byName(group.items)));
+      children.push(buildComparisonTable(byName(group.items), notes));
       children.push(blank());
     }
     if (condensed.length) {
@@ -474,7 +529,7 @@ function buildReevalDocument(
   // Flagged on the prior report, absent from this draw: no tier applies.
   if (notRetested.length) {
     children.push(groupHeading("Not Retested on This Panel"));
-    children.push(buildComparisonTable(byName(notRetested)));
+    children.push(buildComparisonTable(byName(notRetested), notes));
     children.push(blank());
   }
 
@@ -496,6 +551,8 @@ function buildReevalDocument(
     );
   }
 
+  // Back to portrait for the cortisol table (its own portrait grid) onwards.
+  children = after;
   // Salivary cortisol (when uploaded) closes the comparison section, with the
   // endocrine findings, whether or not any marker was out of range.
   children.push(...buildSalivaCortisolSection(analysis, narrative ? narrative.cortisol : null));
@@ -575,20 +632,9 @@ function buildReevalDocument(
     title: "Functional Medicine Follow-Up Report",
     description: "Comparative analysis of current and prior blood work",
     sections: [
-      {
-        properties: {
-          page: {
-            size: { width: PAGE_WIDTH, height: PAGE_HEIGHT },
-            margin: {
-              top: PAGE_MARGIN,
-              right: PAGE_MARGIN,
-              bottom: PAGE_MARGIN,
-              left: PAGE_MARGIN,
-            },
-          },
-        },
-        children,
-      },
+      docSection(before, "portrait"),
+      docSection(chart, "landscape"),
+      docSection(after, "portrait"),
     ],
   });
 }
@@ -756,18 +802,20 @@ function groupHeading(label: string): Paragraph {
   });
 }
 
-// Comparison columns sum to CONTENT_WIDTH (9360). Same rule as CHART_GRID:
-// whatever is here must also be emitted as the table's columnWidths.
-const RC_MARKER = 1700;
-const RC_PRIOR = 1400;
-const RC_CURRENT = 1400;
-const RC_LAB = 1430;
-const RC_OPTIMAL = 1430;
+// Comparison columns sum to LANDSCAPE_CONTENT_WIDTH (12960). Same rule as the
+// chart grid: whatever is here must also be emitted as the table's
+// columnWidths. The Interpretation column is the widest.
+const RC_MARKER = 1400;
+const RC_PRIOR = 1100;
+const RC_CURRENT = 1200;
+const RC_LAB = 1500;
+const RC_OPTIMAL = 1500;
 // Fits the longest re-eval chip ("Out of Lab Range") on one line.
 const RC_STATUS = 2000;
-const RC_GRID = [RC_MARKER, RC_PRIOR, RC_CURRENT, RC_LAB, RC_OPTIMAL, RC_STATUS];
+const RC_NOTE = 4260;
+const RC_GRID = [RC_MARKER, RC_PRIOR, RC_CURRENT, RC_LAB, RC_OPTIMAL, RC_STATUS, RC_NOTE];
 
-function buildComparisonTable(rows: ComparisonRow[]): Table {
+function buildComparisonTable(rows: ComparisonRow[], notes: ReadonlyMap<string, string>): Table {
   const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
   const head = new TableRow({
     tableHeader: true,
@@ -778,6 +826,7 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
       chartHeaderCell("Lab Reference Range", RC_LAB, shading),
       chartHeaderCell("Functional/Optimal Target", RC_OPTIMAL, shading),
       chartHeaderCell("Status", RC_STATUS, shading),
+      chartHeaderCell("Interpretation", RC_NOTE, shading),
     ],
   });
 
@@ -799,12 +848,13 @@ function buildComparisonTable(rows: ComparisonRow[]): Table {
             r.prior === PRIOR_NOT_FOUND || r.prior === PRIOR_PENDING,
             r.direction,
           ),
+          noteCell(noteFor(notes, r.marker), RC_NOTE),
         ],
       }),
   );
 
   return new Table({
-    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+    width: { size: LANDSCAPE_CONTENT_WIDTH, type: WidthType.DXA },
     columnWidths: RC_GRID,
     rows: [head, ...body],
   });
@@ -1382,16 +1432,51 @@ function chipParagraph(chip: StatusChip): Paragraph {
 
 // ----- Section 2 chart -----
 
-function buildChartTable(rows: ChartRow[]): Table {
+/**
+ * The note for a chart row. Joined by the marker name the model copied from
+ * the payload, which is the canonical name; a case-insensitive match and the
+ * chart's short display name are accepted as fallbacks so a harmless
+ * respelling does not blank the cell. "" when there is no note.
+ */
+export function noteFor(notes: ReadonlyMap<string, string>, marker: string): string {
+  const exact = notes.get(marker);
+  if (exact) return exact;
+  const want = marker.trim().toLowerCase();
+  const short = shortMarkerName(marker).toLowerCase();
+  for (const [name, note] of notes) {
+    const have = name.trim().toLowerCase();
+    if (have === want || have === short) return note;
+  }
+  return "";
+}
+
+/** Interpretation cell: plain text, blank when there is no note. */
+function noteCell(text: string, width: number): TableCell {
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    margins: { top: 80, bottom: 80, left: 120, right: 120 },
+    children: [
+      new Paragraph({
+        children: text
+          ? [new TextRun({ text, color: "000000", size: 18, font: "Arial" })]
+          : [],
+      }),
+    ],
+  });
+}
+
+function buildChartTable(rows: ChartRow[], notes: ReadonlyMap<string, string>): Table {
   const shading = { fill: LIGHT_TEAL, type: ShadingType.CLEAR, color: "auto" };
   const head = new TableRow({
     tableHeader: true,
     children: [
-      chartHeaderCell("Marker", COL_MARKER, shading),
-      chartHeaderCell("Result", COL_RESULT, shading),
-      chartHeaderCell("Lab Reference Range", COL_LAB, shading),
-      chartHeaderCell("Functional/Optimal Target", COL_OPTIMAL, shading),
-      chartHeaderCell("Status", COL_STATUS, shading),
+      chartHeaderCell("Marker", LC_MARKER, shading),
+      chartHeaderCell("Result", LC_RESULT, shading),
+      chartHeaderCell("Lab Reference Range", LC_LAB, shading),
+      chartHeaderCell("Functional/Optimal Target", LC_OPTIMAL, shading),
+      chartHeaderCell("Status", LC_STATUS, shading),
+      chartHeaderCell("Interpretation", LC_NOTE, shading),
     ],
   });
 
@@ -1402,18 +1487,19 @@ function buildChartTable(rows: ChartRow[]): Table {
         // the top of the next page; keeping it whole is far more readable.
         cantSplit: true,
         children: [
-          chartCell(shortMarkerName(r.marker), COL_MARKER, { bold: true }),
-          chartCell(r.result, COL_RESULT, { bold: true }),
-          chartCell(r.labRange, COL_LAB),
-          chartCell(displayOptimalRange(r.labRange, r.optimalRange), COL_OPTIMAL),
-          chipCell(statusChip(r.status, r.withinLabRange), COL_STATUS),
+          chartCell(shortMarkerName(r.marker), LC_MARKER, { bold: true }),
+          chartCell(r.result, LC_RESULT, { bold: true }),
+          chartCell(r.labRange, LC_LAB),
+          chartCell(displayOptimalRange(r.labRange, r.optimalRange), LC_OPTIMAL),
+          chipCell(statusChip(r.status, r.withinLabRange), LC_STATUS),
+          noteCell(noteFor(notes, r.marker), LC_NOTE),
         ],
       }),
   );
 
   return new Table({
-    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
-    columnWidths: CHART_GRID,
+    width: { size: LANDSCAPE_CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: LANDSCAPE_CHART_GRID,
     rows: [head, ...body],
   });
 }
@@ -1429,11 +1515,11 @@ function buildOptimalTable(groups: Array<BodySystemGroup<ChartRow>>): Table {
   const head = new TableRow({
     tableHeader: true,
     children: [
-      chartHeaderCell("Marker", COL_MARKER, shading),
-      chartHeaderCell("Result", COL_RESULT, shading),
-      chartHeaderCell("Lab Reference Range", COL_LAB, shading),
-      chartHeaderCell("Functional/Optimal Target", COL_OPTIMAL, shading),
-      chartHeaderCell("Status", COL_STATUS, shading),
+      chartHeaderCell("Marker", LO_MARKER, shading),
+      chartHeaderCell("Result", LO_RESULT, shading),
+      chartHeaderCell("Lab Reference Range", LO_LAB, shading),
+      chartHeaderCell("Functional/Optimal Target", LO_OPTIMAL, shading),
+      chartHeaderCell("Status", LO_STATUS, shading),
     ],
   });
 
@@ -1444,9 +1530,9 @@ function buildOptimalTable(groups: Array<BodySystemGroup<ChartRow>>): Table {
         cantSplit: true,
         children: [
           new TableCell({
-            columnSpan: CHART_GRID.length,
+            columnSpan: LANDSCAPE_OPTIMAL_GRID.length,
             borders: bordersAll(),
-            width: { size: CONTENT_WIDTH, type: WidthType.DXA },
+            width: { size: LANDSCAPE_CONTENT_WIDTH, type: WidthType.DXA },
             shading: { fill: "F2F2F2", type: ShadingType.CLEAR, color: "auto" },
             margins: { top: 40, bottom: 40, left: 120, right: 120 },
             children: [
@@ -1466,11 +1552,11 @@ function buildOptimalTable(groups: Array<BodySystemGroup<ChartRow>>): Table {
         new TableRow({
           cantSplit: true,
           children: [
-            condensedCell(shortMarkerName(r.marker), COL_MARKER, { bold: true }),
-            condensedCell(r.result, COL_RESULT),
-            condensedCell(r.labRange, COL_LAB),
-            condensedCell(displayOptimalRange(r.labRange, r.optimalRange), COL_OPTIMAL),
-            condensedChipCell(statusChip(r.status, r.withinLabRange), COL_STATUS),
+            condensedCell(shortMarkerName(r.marker), LO_MARKER, { bold: true }),
+            condensedCell(r.result, LO_RESULT),
+            condensedCell(r.labRange, LO_LAB),
+            condensedCell(displayOptimalRange(r.labRange, r.optimalRange), LO_OPTIMAL),
+            condensedChipCell(statusChip(r.status, r.withinLabRange), LO_STATUS),
           ],
         }),
       );
@@ -1478,8 +1564,8 @@ function buildOptimalTable(groups: Array<BodySystemGroup<ChartRow>>): Table {
   }
 
   return new Table({
-    width: { size: CONTENT_WIDTH, type: WidthType.DXA },
-    columnWidths: CHART_GRID,
+    width: { size: LANDSCAPE_CONTENT_WIDTH, type: WidthType.DXA },
+    columnWidths: LANDSCAPE_OPTIMAL_GRID,
     rows,
   });
 }
@@ -1564,52 +1650,6 @@ function chartCell(
       }),
     ],
   });
-}
-
-function buildReassuringParagraphs(analysis: DeterministicAnalysis): Paragraph[] {
-  const { notable, other, totalCount } = analysis.reassuring;
-  if (totalCount === 0) {
-    return [
-      new Paragraph({
-        spacing: { after: 200 },
-        children: [
-          runItalic(
-            "No markers on this panel fell within both the standard and functional optimal ranges.",
-          ),
-        ],
-      }),
-    ];
-  }
-
-  const out: Paragraph[] = [];
-  if (notable.length) {
-    out.push(
-      new Paragraph({
-        spacing: { after: 120 },
-        children: [
-          runBold("Reassuring markers within both standard and functional optimal ranges: "),
-          runPlain(`${notable.join("; ")}.`),
-        ],
-      }),
-    );
-  }
-  if (other.length) {
-    out.push(
-      new Paragraph({
-        spacing: { after: 200 },
-        children: [
-          runItalic(`All other markers within range (${other.length}): `),
-          new TextRun({
-            text: `${other.join("; ")}.`,
-            color: GREY,
-            size: 18,
-            font: "Arial",
-          }),
-        ],
-      }),
-    );
-  }
-  return out;
 }
 
 // ----- Narrative rendering -----

@@ -44,6 +44,10 @@ export interface NarrativeBlock {
 export interface AnalysisNarrative {
   /** Short noun phrase in the patient's own terms; drives the section labels. */
   chiefConcern: string;
+  /** Inline chart notes keyed by the marker name the model copied from the
+   *  payload (the canonical name). The chart's Interpretation column; a marker
+   *  with no entry renders a blank cell. */
+  markerNotes: Map<string, string>;
   clinicalPresentation: NarrativeBlock[];
   reassuring: NarrativeBlock[];
   rootCause: NarrativeBlock[];
@@ -263,6 +267,32 @@ function cortisolFieldSpec(block: SalivaCortisolPayload | null | undefined): str
   ];
 }
 
+/**
+ * The chart's inline "What This Means" column, shared by both modes. The
+ * document joins each note to its chart row by the marker name, so the name
+ * must be copied verbatim; a marker without a note simply gets a blank cell.
+ */
+function markerInterpretationFieldSpec(markerField: string): string[] {
+  return [
+    "",
+    "- markerInterpretations: array of { marker, note }, one entry for EVERY marker",
+    `    in \`${markerField}\` (the out-of-range and outside-optimal markers; the`,
+    "    in-range markers need no note). These print inline in the chart beside each",
+    "    marker, so the patient reads them. For each one:",
+    "    * `marker`: the marker's `name` copied character-for-character from",
+    `      \`${markerField}\`. The document matches on it; an altered name leaves the`,
+    "      cell blank.",
+    "    * `note`: ONE OR TWO short sentences in plain, everyday language saying what",
+    "      the marker is and what being out of range means for this patient in",
+    "      practical terms. Match this voice: \"LDL is the 'sticky' cholesterol that",
+    "      can build up inside artery walls. Hers is in the high zone - the biggest",
+    "      risk factor we can actually change.\" Warm, direct, no jargon, no",
+    "      diagnosis, no biochemistry. Do NOT restate the value, the range, or the",
+    "      status - those sit in the neighbouring cells. No name and no other",
+    "      identifier; refer to the patient as 'you' or by pronoun only when needed.",
+  ];
+}
+
 export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
   const hasIntake = !!payload.intake && payload.intake.trim().length > 0;
   const ageSex = [
@@ -302,6 +332,7 @@ export function buildInitialAnalysisPrompt(payload: AnalysisPayload): string {
     hasIntake ? "```" : "",
     "",
     fieldSpec(hasIntake),
+    ...markerInterpretationFieldSpec("flaggedMarkers"),
     ...cortisolFieldSpec(payload.salivaCortisol),
   ]
     .filter((line) => line !== "")
@@ -315,6 +346,8 @@ export interface ReevalNarrative {
    *  that reach the document, and only into the Prior column. */
   priorFacts: Map<string, PriorMarkerFact>;
   chiefConcern: string;
+  /** See AnalysisNarrative.markerNotes. */
+  markerNotes: Map<string, string>;
   overview: NarrativeBlock[];
   rootCause: NarrativeBlock[];
   protocol: NarrativeBlock[];
@@ -477,6 +510,7 @@ export function buildReevalPrompt(payload: ReevalPayload): string {
     "      likelyDrivers:       what is most likely behind the chief concern now, and",
     "                           why it connects to how they feel.",
     "      planInPlainLanguage: what the updated plan does about it.",
+    ...markerInterpretationFieldSpec("currentFlaggedMarkers"),
     ...cortisolFieldSpec(payload.salivaCortisol),
     "",
     "Write plain prose inside the fields — no markdown, no bullet characters, no",
@@ -641,6 +675,30 @@ const bullets = (items: string[]): NarrativeBlock[] =>
   items.map((text) => ({ type: "bullet" as const, text }));
 
 /**
+ * markerInterpretations -> Map of marker name -> note. Lenient on purpose: a
+ * missing or malformed entry costs that one marker its note (the chart prints
+ * a blank cell), never the whole generation. First entry for a name wins.
+ */
+export function markerNotesFrom(value: unknown): Map<string, string> {
+  const notes = new Map<string, string>();
+  if (!Array.isArray(value)) return notes;
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const marker =
+      typeof (entry as { marker?: unknown }).marker === "string"
+        ? (entry as { marker: string }).marker.trim()
+        : "";
+    const note =
+      typeof (entry as { note?: unknown }).note === "string"
+        ? (entry as { note: string }).note.trim()
+        : "";
+    if (!marker || !note || notes.has(marker)) continue;
+    notes.set(marker, note);
+  }
+  return notes;
+}
+
+/**
  * Validate the structured response and convert it to render blocks.
  * Throws NarrativeParseError on anything malformed, which the route turns into
  * the clean error + deterministic-scaffold path.
@@ -652,6 +710,7 @@ export function toAnalysisNarrative(json: InitialNarrativeJson): AnalysisNarrati
   const chiefConcern = readChiefConcern(json.chiefConcern);
   return {
     chiefConcern,
+    markerNotes: markerNotesFrom(json.markerInterpretations),
     clinicalPresentation: bullets(
       requireNonEmptyStrings(json.clinicalPresentation, "clinicalPresentation"),
     ),
@@ -686,6 +745,7 @@ export function toReevalNarrative(json: ReevalNarrativeJson): ReevalNarrative {
   return {
     priorFacts,
     chiefConcern,
+    markerNotes: markerNotesFrom(json.markerInterpretations),
     overview: paragraphs(requireNonEmptyStrings(json.overview, "overview")),
     rootCause: patternsToBlocks(
       json.comparativeRootCause,
