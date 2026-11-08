@@ -253,9 +253,97 @@ function estroneTable() {
   eq(formatStatus(e1, labVerdict(e1)), "SUBOPTIMAL*", "Estrone status");
 }
 
+// Verbatim from the same report's first page: the Estradiol row wraps its
+// assay-method qualifier onto the value line, and its reference-table header
+// wraps before the colon. The single-line LC/MS / MS markers around it are
+// the negative cases: a method token INSIDE a one-line name must stay put.
+const ESTRADIOL_TWO_LINE = [
+  "Test Name In Range Out Of Range Reference Range Lab",
+  "ESTROGENS, FRACTIONATED, LC/MS",
+  "ESTRONE 19 pg/mL EZ",
+  "ESTRADIOL, ULTRASENSITIVE EZ",
+  "LC/MS 14 pg/mL",
+  "Female Reference Ranges for Estradiol,",
+  "Ultrasensitive (pg/mL):",
+  "Follicular Phase: 39-375",
+  "Luteal Phase: 48-440",
+  "Postmenopausal Phase: < or = 10",
+  "This test was developed and its analytical performance",
+  "characteristics have been determined by Quest Diagnostics.",
+  "It has not been cleared or approved by the FDA. This assay",
+  "has been validated pursuant to the CLIA regulations and is",
+  "used for clinical purposes.",
+  "ESTRIOL, SERUM <0.10 ng/mL EZ",
+  "TESTOSTERONE, FREE, BIOAVAILABLE AND TOTAL, MS",
+  "TESTOSTERONE, TOTAL, MS 9 2-45 ng/dL AMD",
+  "PROGESTERONE, LC/MS 0.1 ng/mL EZ",
+  "PREGNENOLONE, LC/MS 37 22-237 ng/dL EZ",
+  "CORTISOL, TOTAL, LC/MS 12.0 mcg/dL EZ",
+].join("\n");
+
+function estradiolTwoLineName() {
+  const parsed = parseQuestText(ESTRADIOL_TWO_LINE);
+  const names = parsed.markers.map((m) => m.rawName);
+
+  // ----- The wrapped row is ONE marker, named by its first line -----
+  ok(!names.includes("LC/MS"), `no marker is named "LC/MS" (got ${JSON.stringify(names)})`);
+  const e2 = one(parsed.markers, "ESTRADIOL, ULTRASENSITIVE");
+  if (!e2) return;
+  eq(e2.value, 14, "Estradiol value comes from the second line");
+  eq(e2.unit, "pg/mL", "Estradiol unit comes from the second line");
+  eq(e2.labFlagFromPdf, null, "no lab flag");
+  ok(!e2.referenceRangeRaw, `the row prints no inline range (got ${JSON.stringify(e2.referenceRangeRaw)})`);
+  ok(!/EZ/.test(e2.rawName), "the trailing lab code is not part of the name");
+  const note = e2.referenceNoteRaw ?? "";
+  ok(/Follicular Phase: 39-375/.test(note), `the wrapped-header phase table is captured on Estradiol (got ${JSON.stringify(note)})`);
+  ok(/Postmenopausal Phase: < or = 10/.test(note), "capture runs to the last stratum row");
+  ok(!/developed|analytical/.test(note), "capture stops before the assay prose");
+
+  // ----- Neighbours are untouched -----
+  const estrone = one(parsed.markers, "ESTRONE");
+  ok(!!estrone && estrone.value === 19, "Estrone stays its own marker");
+  ok(!/39-375/.test(estrone?.referenceNoteRaw ?? ""), "Estradiol's table is not on Estrone");
+  const estriol = one(parsed.markers, "ESTRIOL, SERUM");
+  ok(!!estriol && estriol.value === "<0.10", "Estriol stays its own marker");
+
+  // ----- Negative cases: a method token inside a ONE-line name stays put -----
+  for (const [raw, value] of [
+    ["TESTOSTERONE, TOTAL, MS", 9],
+    ["PROGESTERONE, LC/MS", 0.1],
+    ["PREGNENOLONE, LC/MS", 37],
+    ["CORTISOL, TOTAL, LC/MS", 12],
+  ] as const) {
+    const m = one(parsed.markers, raw);
+    ok(!!m && m.value === value, `${raw} parses as a single-line marker with value ${value}`);
+  }
+  ok(!names.includes("TESTOSTERONE, FREE, BIOAVAILABLE AND TOTAL, MS"), "the testosterone panel header is not a marker");
+
+  // ----- Through the engine and the female overlay -----
+  const flagged = flagMarkers(matchMarkers(parsed.markers), { sex: "female" });
+  const fE2 = flagged.find((m) => m.canonicalName === "Estradiol (E2)");
+  ok(!!fE2, `"ESTRADIOL, ULTRASENSITIVE" matches the Estradiol record (got ${JSON.stringify(flagged.filter((m) => /ESTRADIOL/.test(m.rawName)).map((m) => [m.rawName, m.matchStatus, m.canonicalName]))})`);
+  const overlay = applyHormoneOverlay(flagged, {
+    sex: "female",
+    status: "early_follicular",
+    cycleLength: null,
+    cycleDay: null,
+  });
+  const oE2 = overlay.markers.find((m) => m.canonicalName === "Estradiol (E2)");
+  if (!oE2) return;
+  eq(JSON.stringify(oE2.effectiveLabRange), JSON.stringify({ min: 39, max: 375 }), "Estradiol lab range is the follicular row of the printed table");
+  eq(formatLabRange(oE2), "39–375", "Estradiol Lab Range cell");
+  eq(formatOptimalRange(oE2), "40–100", "Estradiol early-follicular functional optimal");
+  eq(labVerdict(oE2), false, "14 sits below the follicular lab row");
+  eq(markerTier(oE2), "outside-lab", "Estradiol 14 is the red tier");
+  eq(formatStatus(oE2, labVerdict(oE2)), "LOW", "Estradiol status LOW");
+  // Testosterone Total keeps its own, single-line identity through matching.
+  ok(flagged.some((m) => m.canonicalName === "Testosterone Total" && m.value === 9), "Testosterone Total still matches from its one-line row");
+}
+
 function main() {
   labServicesManagerLayout();
   estroneTable();
+  estradiolTwoLineName();
 
   if (failures.length) {
     console.error(`\nquest-parser: ${failures.length} FAILED, ${passed} passed\n`);

@@ -777,6 +777,18 @@ function preprocess(rawLines: string[]): string[] {
       }
     }
 
+    // Join a stratified reference-table header that wraps before its colon:
+    //   "Female Reference Ranges for Estradiol," + "Ultrasensitive (pg/mL):"
+    // so REF_TABLE_HEAD_RE sees one header and the phase rows under it are
+    // captured on the marker instead of falling through as prose.
+    if (i + 1 < rawLines.length && /Reference Ranges?\s+for\s+[^:]*,$/i.test(line)) {
+      const next = rawLines[i + 1].trim();
+      if (/^[A-Za-z(][^:]*:$/.test(next)) {
+        line = `${line} ${next}`;
+        i++;
+      }
+    }
+
     out.push(line);
   }
   return out;
@@ -932,6 +944,47 @@ function tryJoinContinuationMarker(lineN: string, lineN1: string): string | null
   if (!tokensN1.some(looksLikeValue)) return null;
 
   return `${nameTokens.join(" ")} ${tokensN1.join(" ")}`;
+}
+
+/** Assay-method qualifiers Quest can wrap onto the start of a marker's value
+ *  line. The method is a qualifier, never the marker's name. */
+const ASSAY_METHOD_TOKENS = new Set(["LC/MS", "LC/MS/MS", "IA", "ECLIA", "RIA", "EZ"]);
+
+/**
+ * Two-line marker reconstruction for a wrapped assay-method qualifier: lineN
+ * is a name-only row (all-caps tokens, no value, optional trailing lab code)
+ * and lineN1 opens with a method token followed by a value and a unit:
+ *   "ESTRADIOL, ULTRASENSITIVE EZ" + "LC/MS 14 pg/mL"
+ *     -> "ESTRADIOL, ULTRASENSITIVE 14 pg/mL EZ"
+ * The method token is dropped (it is a qualifier, not the name); the value,
+ * unit and any reference text come from lineN1; the lab code moves to the end
+ * where tryParseMarkerRow strips it. A single-line marker that merely CONTAINS
+ * a method token in its name ("TESTOSTERONE, TOTAL, MS 9 2-45 ng/dL") never
+ * reaches this join: lineN carries a value, so it is not name-only.
+ */
+function tryJoinMethodMarker(lineN: string, lineN1: string): string | null {
+  const tokensN = tokenize(lineN);
+  if (tokensN.length < 1 || tokensN.length > 6) return null;
+  let nameTokens = tokensN;
+  let labCode: string | null = null;
+  if (isLabCode(nameTokens[nameTokens.length - 1])) {
+    labCode = nameTokens[nameTokens.length - 1];
+    nameTokens = nameTokens.slice(0, -1);
+  }
+  if (nameTokens.length === 0) return null;
+  if (!nameTokens.every((t) => /^[A-Z][A-Z0-9,()&/.-]*$/.test(t))) return null;
+  if (nameTokens.some(looksLikeValue)) return null;
+
+  const tokensN1 = tokenize(lineN1);
+  // method, value, unit — at least.
+  if (tokensN1.length < 3) return null;
+  if (!ASSAY_METHOD_TOKENS.has(tokensN1[0])) return null;
+  if (!looksLikeValue(tokensN1[1])) return null;
+
+  const rest = tokensN1.slice(1);
+  const trailingLabCode = isLabCode(rest[rest.length - 1]);
+  const tail = labCode && !trailingLabCode ? ` ${labCode}` : "";
+  return `${nameTokens.join(" ")} ${rest.join(" ")}${tail}`;
 }
 
 function tryJoinMultiLinePanel(lineN: string, lineN1: string): string | null {
@@ -1240,7 +1293,10 @@ export function parseQuestText(text: string): ParseResult {
 
     // --- Skips ---
 
-    if (SKIP_PATTERNS.some((re) => re.test(trimmed))) {
+    // A stratified reference-table header ("Female Reference Ranges for
+    // Estradiol, Ultrasensitive (pg/mL):") outranks the furniture skips: the
+    // table under it belongs to the marker above and is captured below.
+    if (!REF_TABLE_HEAD_RE.test(trimmed) && SKIP_PATTERNS.some((re) => re.test(trimmed))) {
       // Some patterns (e.g. "Reference Range") need to flip context.
       if (/^Reference Range$/i.test(trimmed)) {
         inReferenceRangeBlock = true;
@@ -1375,6 +1431,29 @@ export function parseQuestText(text: string): ParseResult {
           markers.push({ ...parsed, pageNumber, rawLine: joined3 });
           pendingNameContext = null;
           i += 2;
+          continue;
+        }
+      }
+    }
+
+    // Two-line marker whose assay-method qualifier wraps onto the value line:
+    //   "ESTRADIOL, ULTRASENSITIVE EZ"
+    //   "LC/MS 14 pg/mL"
+    // Without this the second line parsed as an unmatched marker named
+    // "LC/MS" and Estradiol was lost. Tried before the continuation /
+    // panel-header joins, which do not recognise a value line that opens
+    // with a method token.
+    if (i + 1 < processedLines.length) {
+      const joinedMethod = tryJoinMethodMarker(
+        trimmed,
+        processedLines[i + 1].text.trim(),
+      );
+      if (joinedMethod) {
+        const parsed = tryParseMarkerRow(joinedMethod);
+        if (parsed) {
+          markers.push({ ...parsed, pageNumber, rawLine: joinedMethod });
+          pendingNameContext = null;
+          i += 1;
           continue;
         }
       }

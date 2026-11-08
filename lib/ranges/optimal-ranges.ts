@@ -2548,8 +2548,10 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
     aliases: [
       "E2",
       "ESTRADIOL",
+      "ESTRADIOL, ULTRASENSITIVE",
       "Estradiol",
       "Estradiol (E2)",
+      "Estradiol, Ultrasensitive",
       "estradiol",
     ],
     unit: "pg/mL",
