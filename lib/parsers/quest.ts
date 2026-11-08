@@ -391,7 +391,8 @@ const SKIP_PATTERNS: RegExp[] = [
   /^Jellinger PS et al/,
   /^Grundy SM,/,
   /^Handelsman Y,/,
-  /^Adult Female Reference Ranges/,
+  // "Adult Female Reference Ranges for Estrone:" used to be skipped here, which
+  // threw away the phase table under it (REF_TABLE_HEAD_RE now captures it).
   /^The ADA defines/,
   /^Albuminuria Category/,
   /^Normal to Mildly/,
@@ -591,7 +592,14 @@ function looksLikeSpilledRange(text: string): boolean {
 // under it were dropped entirely — so the report's range cell came out garbled
 // and no lab-range flag could compute. This is matched FIRST and the whole
 // block is kept verbatim instead.
-const REF_TABLE_HEAD_RE = /^(?:[A-Za-z]+\s+)?Reference Ranges?\s+for\s+.+:\s*$/i;
+// The qualifier can run to several words ("Adult Female Reference Ranges for
+// Estrone:"); a one-word allowance missed that header, so Estrone's phase
+// table fell through unparsed and the marker printed no range at all.
+const REF_TABLE_HEAD_RE = /^(?:[A-Za-z]+\s+){0,3}Reference Ranges?\s+for\s+.+:\s*$/i;
+
+/** A stratified table for patients this practice does not see. Its rows are
+ *  consumed (so they cannot leak into the next marker) but never stored. */
+const REF_TABLE_IRRELEVANT_RE = /^Pediatric\b/i;
 
 /** A line still inside a stratified reference table. Such rows either name a
  *  stratum and end with a colon, or carry the numbers for one. Prose (the
@@ -985,6 +993,11 @@ const SINGLE_TOKEN_REJECT = new Set([
   "ANTIBODIES", "RATIO",
 ]);
 
+/** Result-status column of Quest's Lab Services Manager layout (its key:
+ *  "PEND Pending Result / PRE Preliminary Result / FINAL Final Result / RE
+ *  Reissued Result"). Stripped from the end of a row before the unit is read. */
+const RESULT_STATUS_TOKENS = new Set(["FINAL", "PEND", "PRE", "RE"]);
+
 /** Does this token look like a numeric reference range value? Used to
  *  distinguish a structured marker row from random prose. */
 function looksLikeNumericRefToken(token: string): boolean {
@@ -1005,6 +1018,19 @@ function tryParseMarkerRow(line: string): RowParse | null {
 
   let working = [...tokens];
   let hadLabCode = false;
+
+  // 0. Strip a trailing result-status token. Quest's Lab Services Manager
+  //    layout ends every row with it:
+  //      "DHEA SULFATE (2191-5)  46  Reference Range: 15-205 mcg/dL  FINAL"
+  //      "INSULIN (20448-7)  5.2  uIU/mL  FINAL"
+  //    Left in place it sat where the unit is looked for, so rows with no
+  //    inline range (FSH, INSULIN, LH) failed the structural check and were
+  //    dropped, and their "Reference Range" blocks were appended to whichever
+  //    marker parsed last. That is how DHEA Sulfate came to print Insulin's
+  //    "< or = 18.4".
+  if (working.length > 2 && RESULT_STATUS_TOKENS.has(working[working.length - 1])) {
+    working.pop();
+  }
 
   // 1. Strip trailing lab code if present
   if (working.length && isLabCode(working[working.length - 1])) {
@@ -1102,8 +1128,18 @@ function tryParseMarkerRow(line: string): RowParse | null {
     cursor += 1;
   }
 
-  // 7. Everything remaining is the reference range
-  const refTokens = afterName.slice(cursor);
+  // 7. Everything remaining is the reference range. The same layout prints the
+  //    column label inline ("Reference Range: 15-205"); the label is not part
+  //    of the range and stopped parseReferenceRange from reading the figures,
+  //    so every such row fell back to the dictionary's hardcoded range.
+  let refTokens = afterName.slice(cursor);
+  if (
+    refTokens.length >= 2 &&
+    /^Reference$/i.test(refTokens[0]) &&
+    /^Ranges?:?$/i.test(refTokens[1])
+  ) {
+    refTokens = refTokens.slice(2);
+  }
   const refRangeRaw = refTokens.length ? refTokens.join(" ") : null;
 
   // Structural sanity check: a real marker row should have at least ONE of:
@@ -1292,10 +1328,13 @@ export function parseQuestText(text: string): ParseResult {
           continue;
         }
         if (!isReferenceTableLine(next)) break;
+        // A second table header ("Pediatric Female Reference Ranges for
+        // Estrone:") ends this one; the outer loop then handles it on its own.
+        if (REF_TABLE_HEAD_RE.test(next)) break;
         captured.push(next);
         j += 1;
       }
-      if (last) {
+      if (last && !REF_TABLE_IRRELEVANT_RE.test(trimmed)) {
         const block = captured.join(" ");
         last.referenceNoteRaw = last.referenceNoteRaw
           ? `${last.referenceNoteRaw} ${block}`

@@ -30,6 +30,7 @@ import {
   buildMergedComparisonGroups,
   computePriorInterval,
 } from "../../../../lib/analysis/deterministic";
+import { dedupeRepeatedMarkers } from "../../../../lib/analysis/dedupe";
 import {
   applyHormoneOverlay,
   parseHormoneStatus,
@@ -247,7 +248,10 @@ export async function POST(req: Request): Promise<Response> {
       cycleLength,
       cycleDay,
     });
-    const flagged = overlay.markers;
+    // One row per marker per draw: a merged upload can print the same marker
+    // twice (lib/analysis/dedupe). Applied after flagging + overlay so the
+    // "materially different" test sees the final verdicts.
+    const flagged = dedupeRepeatedMarkers(overlay.markers);
 
     // ----- Saliva cortisol (optional; never fatal to the blood analysis) -----
     // Reduced to values / clock times / windows / statuses here; the raw

@@ -247,9 +247,15 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
   "Additional Markers": [],
 };
 
-/** Lookup key: case-folded, whitespace-collapsed canonical name. */
+/** Lookup key: case-folded, whitespace-collapsed canonical name. A "(repeat)"
+ *  tag (a second result for one marker on the same upload, lib/analysis/dedupe)
+ *  is dropped so the repeat row lands under the same body system. */
 function lookupKey(name: string): string {
-  return name.trim().replace(/\s+/g, " ").toLowerCase();
+  return name
+    .trim()
+    .replace(/\s*\(repeat\)$/i, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 /** Reverse index, derived from SYSTEM_MARKERS at module load. */

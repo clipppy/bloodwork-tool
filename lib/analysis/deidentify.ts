@@ -21,13 +21,16 @@
  */
 
 import type { FlaggedMarker } from "../flagging";
-import { isFlagged } from "../flagging";
 import {
+  displayMarkerName,
   formatLabRange,
   formatOptimalRange,
   formatResult,
   formatStatus,
-  withinLabRange,
+  isChartFlagged,
+  isChartOptimal,
+  labVerdict,
+  rowDirection,
   type PatientSex,
 } from "./deterministic";
 import type { HormoneOverlaySummary } from "./hormone-ranges";
@@ -436,21 +439,23 @@ export function buildPayload(
   flagged: FlaggedMarker[],
   inputs: DeidentifyInputs,
 ): AnalysisPayload {
-  const flaggedMarkers: PayloadMarker[] = flagged.filter(isFlagged).map((m) => ({
-    name: m.canonicalName,
+  // Same row set and same lab-first status rule as the chart (deterministic
+  // markerTier), so the model is handed exactly the rows the document prints.
+  const flaggedMarkers: PayloadMarker[] = flagged.filter(isChartFlagged).map((m) => ({
+    name: displayMarkerName(m),
     result: formatResult(m),
     value: m.value,
     unit: m.unit || null,
     labRange: formatLabRange(m),
     optimalRange: formatOptimalRange(m),
-    status: formatStatus(m, withinLabRange(m)),
-    direction: m.flagDirection,
+    status: formatStatus(m, labVerdict(m)),
+    direction: rowDirection(m),
   }));
 
   const inRangeMarkers: PayloadInRangeMarker[] = flagged
-    .filter((m) => m.flagStatus === "optimal")
+    .filter(isChartOptimal)
     .map((m) => ({
-      name: m.canonicalName,
+      name: displayMarkerName(m),
       value: `${m.value}${m.unit ? ` ${m.unit}` : ""}`,
     }));
 

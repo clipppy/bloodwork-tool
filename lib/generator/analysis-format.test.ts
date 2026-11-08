@@ -32,6 +32,8 @@ import {
   buildChartRows,
   buildDeterministicAnalysis,
   buildOptimalRows,
+  buildReassuring,
+  markerTier,
 } from "../analysis/deterministic";
 import { groupBySystem, systemForMarker } from "../analysis/body-systems";
 import { toAnalysisNarrative, toReevalNarrative } from "../analysis/prompt";
@@ -150,7 +152,13 @@ function main() {
   eq(statusChip("OUT OF RANGE", false).label, "Out of Lab Range", "OUT OF RANGE label");
 
   // A value with no usable lab range is treated as outside it, as before.
-  eq(statusChip("HIGH", null).fill, RED, "null withinLabRange is red");
+  // Lab range first: only a PROVEN lab-range violation is red. A marker with
+  // no lab range to compare against is tiered by its optimal alone (amber).
+  eq(statusChip("HIGH", null).fill, AMBER, "null withinLabRange is amber (no lab range: never red)");
+  eq(statusChip("HIGH", null).label, "Out of Optimal", "null withinLabRange reads Out of Optimal");
+  eq(statusChip("ABOVE OPTIMAL", null).fill, AMBER, "unstarred ABOVE OPTIMAL (no lab range) is amber");
+  eq(statusChip("ABOVE OPTIMAL", null).direction, "(High)", "unstarred ABOVE OPTIMAL keeps its direction");
+  eq(statusChip("SUBOPTIMAL", null).direction, "(Low)", "unstarred SUBOPTIMAL keeps its direction");
 
   // Re-eval vocabulary.
   eq(statusChip("In Range", true).label, "In Range", "re-eval In Range label");
@@ -192,7 +200,9 @@ function main() {
   // Initial-mode rows: the tier follows the same rule as the chip colour.
   eq(tierForChartRow({ status: "HIGH", withinLabRange: false }), "outside-lab", "HIGH outside lab -> red tier");
   eq(tierForChartRow({ status: "LOW", withinLabRange: false }), "outside-lab", "LOW outside lab -> red tier");
-  eq(tierForChartRow({ status: "MODERATE", withinLabRange: null }), "outside-lab", "no usable lab range -> red tier");
+  eq(tierForChartRow({ status: "MODERATE", withinLabRange: null }), "outside-optimal", "no usable lab range -> amber tier, never red");
+  eq(tierForChartRow({ status: "HIGH", withinLabRange: null }), "outside-optimal", "HIGH with no lab range -> amber tier");
+  eq(tierForChartRow({ status: "SUBOPTIMAL", withinLabRange: null }), "outside-optimal", "unstarred SUBOPTIMAL (no lab range) -> amber tier");
   eq(tierForChartRow({ status: "ABOVE OPTIMAL*", withinLabRange: true }), "outside-optimal", "ABOVE OPTIMAL* -> amber tier");
   eq(tierForChartRow({ status: "BORDERLINE LOW*", withinLabRange: true }), "outside-optimal", "BORDERLINE LOW* -> amber tier");
   eq(tierForChartRow({ status: "MODERATE*", withinLabRange: true }), "outside-optimal", "MODERATE* -> amber tier");
@@ -258,6 +268,60 @@ function main() {
   eq(e2e[0].items.map((r) => r.marker).sort().join(","), "Ferritin,Glucose", "red tier: Ferritin + Glucose");
   eq(e2e[1].items.map((r) => r.marker).join(","), "Vitamin D 25-OH", "amber tier: Vitamin D");
   eq(e2e[2].items.map((r) => r.marker).sort().join(","), "Hemoglobin,Platelets", "green tier: Hemoglobin + Platelets");
+
+  // ----- Tier precedence: LAB RANGE FIRST, then functional optimal -----
+  // Total Cholesterol 205 against a printed lab range of <200 (lab-flagged H)
+  // sits inside the practitioner's 150-220 functional window. The engine reads
+  // it as optimal; the chart must still put it in the red tier, and the chip
+  // must agree with the tier.
+  {
+    const chol = flagMarkers(
+      [{ ...matched("Cholesterol", 205, "mg/dL", "<200"), labFlagFromPdf: "H" as const }],
+      { sex: "female" },
+    )[0];
+    eq(chol.flagStatus, "optimal", "engine: 205 is inside the 150-220 functional window (unchanged)");
+    eq(markerTier(chol), "outside-lab", "chart: the printed <200 lab range excludes it -> red tier");
+    const rows = buildChartRows([chol]);
+    eq(rows.length, 1, "Cholesterol is a flagged chart row");
+    eq(rows[0].status, "HIGH", "status reads HIGH (direction read off the lab side)");
+    eq(rows[0].withinLabRange, false, "the row carries the lab verdict");
+    eq(rows[0].result, "205 mg/dL H", "the lab's own H is preserved in the result");
+    eq(tierForChartRow(rows[0]), "outside-lab", "tier: red");
+    eq(statusChip(rows[0].status, rows[0].withinLabRange).fill, RED, "chip: red");
+    eq(statusChip(rows[0].status, rows[0].withinLabRange).label, "Out of Lab Range", "chip: Out of Lab Range");
+    eq(statusChip(rows[0].status, rows[0].withinLabRange).direction, "(High)", "chip: (High)");
+    eq(buildOptimalRows([chol]).length, 0, "it is NOT in the green tier");
+    eq(buildReassuring([chol]).totalCount, 0, "it is NOT a reassuring marker");
+
+    // Inside the lab range, outside the optimal -> amber (unchanged).
+    const vitD = flagMarkers([matched("Vitamin D 25-OH", 31, "ng/mL", "30-100")], { sex: "female" })[0];
+    eq(markerTier(vitD), "outside-optimal", "inside lab, below optimal -> amber tier");
+    eq(buildChartRows([vitD])[0].status, "SUBOPTIMAL*", "inside-lab status keeps the asterisk");
+
+    // The same marker with NO lab range to compare against: tiered by the
+    // optimal alone -> amber, never red; the asterisk (which asserts "inside
+    // the lab range") is dropped because that is not provable.
+    const noLab = { ...vitD, effectiveLabRange: { min: null, max: null }, labRangeSource: null };
+    eq(markerTier(noLab), "outside-optimal", "no lab range -> amber tier");
+    const noLabRow = buildChartRows([noLab])[0];
+    eq(noLabRow.withinLabRange, null, "no lab verdict");
+    eq(noLabRow.status, "SUBOPTIMAL", "status without the inside-lab asterisk");
+    eq(tierForChartRow(noLabRow), "outside-optimal", "tier: amber");
+    eq(statusChip(noLabRow.status, noLabRow.withinLabRange).fill, AMBER, "chip: amber");
+    eq(statusChip(noLabRow.status, noLabRow.withinLabRange).direction, "(Low)", "chip: (Low)");
+
+    // ...unless the lab itself printed an L beside the value: with no range
+    // of our own, the lab's flag is the lab's verdict.
+    const labSaysLow = { ...noLab, labFlagFromPdf: "L" as const };
+    eq(markerTier(labSaysLow), "outside-lab", "no range but a lab L -> red tier");
+    eq(buildChartRows([labSaysLow])[0].status, "LOW", "status LOW");
+    eq(buildChartRows([labSaysLow])[0].withinLabRange, false, "lab verdict false");
+
+    // Inside both -> green.
+    const hgb = flagMarkers([matched("Hemoglobin", 13.8, "g/dL", "11.1-15.9")], { sex: "female" })[0];
+    eq(markerTier(hgb), "optimal", "inside both -> green tier");
+    eq(buildOptimalRows([hgb]).length, 1, "...and it is a green-tier row");
+  }
   // Body-system order is preserved inside a tier: groups come out in taxonomy
   // order, and every row lands under its own system.
   for (const g of e2e) {

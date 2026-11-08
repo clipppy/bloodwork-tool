@@ -708,15 +708,17 @@ const TIER_EMPTY_NOTES: Readonly<Record<ChartTier, string>> = {
 };
 
 /**
- * Tier of an initial-mode chart row. The same rule as the chip's colour:
- * provably inside the lab range -> amber tier; outside it, or no usable lab
- * range to compare against -> red tier. A row whose deterministic status is
- * OPTIMAL (from `optimalRows`) is the green tier.
+ * Tier of an initial-mode chart row. The same lab-first rule as the chip's
+ * colour (statusChip) and as deterministic.markerTier, which decided which
+ * list the row is in: provably outside the lab range (withinLabRange false)
+ * -> red tier; inside it, OR no usable lab range to compare against -> amber
+ * tier. A row whose deterministic status is OPTIMAL (from `optimalRows`) is
+ * the green tier. A marker with no lab range can never chart red.
  */
 export function tierForChartRow(row: Pick<ChartRow, "status" | "withinLabRange">): ChartTier {
   const key = (row.status ?? "").replace(/\*+$/, "").trim().toUpperCase();
   if (key === "OPTIMAL") return "optimal";
-  return row.withinLabRange === true ? "outside-optimal" : "outside-lab";
+  return row.withinLabRange === false ? "outside-lab" : "outside-optimal";
 }
 
 /**
@@ -732,7 +734,7 @@ export function tierForComparisonRow(
   if (key === "OUT OF OPTIMAL") return "outside-optimal";
   if (key === "IN RANGE") return "optimal";
   if (key === "NOT RETESTED") return null;
-  return row.withinLabRange === true ? "outside-optimal" : "outside-lab";
+  return row.withinLabRange === false ? "outside-lab" : "outside-optimal";
 }
 
 export interface TierGroup<T> {
@@ -1214,6 +1216,10 @@ function headerValueCell(text: string, width: number): TableCell {
  * "Vitamin D 1,25 (OH)2 Total" is untouched because its paren is not trailing.
  */
 export function shortMarkerName(canonicalName: string): string {
+  // A "(repeat)" tag marks a second result for the same marker on one upload
+  // (lib/analysis/dedupe); it is a label, not an expansion, and must survive.
+  const repeat = canonicalName.trim().match(/^(.*\S)\s*(\(repeat\))$/i);
+  if (repeat) return `${shortMarkerName(repeat[1])} ${repeat[2]}`;
   const m = canonicalName.trim().match(/^(.*\S)\s*\(([^()]*)\)$/);
   if (!m) return canonicalName.trim();
   const [, prefix, inner] = m;
@@ -1353,9 +1359,11 @@ export function statusChip(
     return { label: "Out of Optimal", direction: carried, fill: CHIP_OPTIMAL };
   }
 
-  // Initial-mode vocabulary. Inside the lab range => amber; the direction the
+  // Initial-mode vocabulary. Lab range first: provably outside it => red;
+  // inside it, or no lab range to compare against => amber (same rule as
+  // tierForChartRow, so chip and tier cannot disagree). The direction the
   // engine flagged becomes the chip's second line.
-  const outsideLab = withinLabRange !== true;
+  const outsideLab = withinLabRange === false;
   const fill = outsideLab ? CHIP_LAB : CHIP_OPTIMAL;
   const label = outsideLab ? "Out of Lab Range" : "Out of Optimal";
   const direction = directionFrom(key) || carried;

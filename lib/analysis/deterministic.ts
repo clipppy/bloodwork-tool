@@ -95,8 +95,10 @@ export interface ChartRow {
   optimalRange: string;
   /** "HIGH", "LOW", "BORDERLINE HIGH*", "SUBOPTIMAL*", ... */
   status: string;
-  /** true = provably inside the lab range (earns the asterisk), false =
-   *  provably outside, null = no usable lab range to compare against. */
+  /** The lab verdict (labVerdict): true = provably inside the lab range (earns
+   *  the asterisk), false = outside it — by the range, or by the lab's own H/L
+   *  when there is no range — null = nothing to compare against. The tier and
+   *  the chip colour are both read off this: only false charts red. */
   withinLabRange: boolean | null;
   category: string;
 }
@@ -211,6 +213,95 @@ export function withinLabRange(m: FlaggedMarker): boolean | null {
   return true;
 }
 
+/**
+ * The lab-range verdict the chart tiers and chips are decided from.
+ *
+ * Same answer as withinLabRange when there is a range to compare against.
+ * When there is none, the lab's own H/L printed beside the value is the lab's
+ * verdict and counts as "outside" (false); with neither, null. Only a false
+ * here can put a marker in the red tier — a marker with no lab range to
+ * compare against is tiered by its functional optimal alone.
+ */
+export function labVerdict(m: FlaggedMarker): boolean | null {
+  const within = withinLabRange(m);
+  if (within !== null) return within;
+  if (m.labFlagFromPdf === "H" || m.labFlagFromPdf === "L") return false;
+  return null;
+}
+
+/** Which side of the lab range the value sits on: read off the same
+ *  effectiveLabRange as withinLabRange, else off the lab's own H/L. null when
+ *  the value is inside the range or there is nothing to compare against. */
+export function labDirection(m: FlaggedMarker): "high" | "low" | null {
+  const eff = m.effectiveLabRange;
+  const v = numericValue(m.value);
+  if (eff && v !== null) {
+    if (eff.max !== null && v > eff.max) return "high";
+    if (eff.min !== null && v < eff.min) return "low";
+    if (eff.min !== null || eff.max !== null) return null;
+  }
+  if (m.labFlagFromPdf === "H") return "high";
+  if (m.labFlagFromPdf === "L") return "low";
+  return null;
+}
+
+/** The direction a chart row reports: the engine's flag direction, else (for a
+ *  value the engine read as optimal but the lab range excludes) the lab side. */
+export function rowDirection(m: FlaggedMarker): "high" | "low" | null {
+  return m.flagDirection ?? labDirection(m);
+}
+
+/** The three chart tiers, worst first. Named for what they mean so the Word
+ *  generator and the tests read the same vocabulary. */
+export type MarkerTier = "outside-lab" | "outside-optimal" | "optimal";
+
+/**
+ * Tier precedence: LAB RANGE FIRST, then the functional optimal.
+ *
+ *   outside the lab range (labVerdict false)        -> "outside-lab"   (red)
+ *   inside it, or no lab range, but engine-flagged  -> "outside-optimal" (amber)
+ *   inside both                                      -> "optimal"       (green)
+ *
+ * The engine's own verdict is not re-derived: a marker it flagged stays
+ * flagged. What this adds is the case the engine's optimal_two_tier handler
+ * reads as "optimal" because the value sits inside the functional window even
+ * though the lab range excludes it (Total Cholesterol 205 against a lab range
+ * of <200 and a functional window of 150-220): the lab range governs, so the
+ * marker charts red, never green. null for a marker that could not be
+ * evaluated at all (not_flaggable / informational).
+ */
+export function markerTier(m: FlaggedMarker): MarkerTier | null {
+  if (m.flagStatus === "not_flaggable" || m.flagStatus === "informational") return null;
+  if (labVerdict(m) === false) return "outside-lab";
+  if (isFlagged(m)) return "outside-optimal";
+  if (m.flagStatus === "optimal") return "optimal";
+  return null;
+}
+
+/** A marker that belongs in the flagged chart (red or amber tier). */
+export function isChartFlagged(m: FlaggedMarker): boolean {
+  const tier = markerTier(m);
+  return tier === "outside-lab" || tier === "outside-optimal";
+}
+
+/** A marker that belongs in the green "What's Working" tier. */
+export function isChartOptimal(m: FlaggedMarker): boolean {
+  return markerTier(m) === "optimal";
+}
+
+/** Suffix the chart prints on a second, materially different result for a
+ *  marker already on the panel (see lib/analysis/dedupe). */
+export const REPEAT_SUFFIX = " (repeat)";
+
+/** The name a chart row / payload entry prints for a marker. The canonical
+ *  name, plus the repeat suffix when the dedupe pass kept this result as a
+ *  repeat of an earlier one. Lookups (category, optimal range, body system)
+ *  keep using canonicalName. */
+export function displayMarkerName(m: FlaggedMarker): string {
+  const repeat = (m as { repeatOf?: string }).repeatOf;
+  return repeat ? `${m.canonicalName}${REPEAT_SUFFIX}` : m.canonicalName;
+}
+
 /** "123 mcg/dL H" — value, unit, and the lab's own flag letter when it set one,
  *  matching the Result column in the sample doc. */
 export function formatResult(m: FlaggedMarker): string {
@@ -275,30 +366,36 @@ export function formatOptimalRange(m: FlaggedMarker): string {
 }
 
 /**
- * Status column.
+ * Status column. Follows the same lab-first rule as markerTier, so the status
+ * wording, the chip colour and the tier can never disagree.
  *
- * Outside the lab range (or no lab range to compare) → the plain direction the
- * engine flagged: HIGH / LOW / MODERATE / OUT OF RANGE.
+ * Outside the lab range (`within` false) → the plain direction: HIGH / LOW /
+ * MODERATE / OUT OF RANGE. For a value the engine read as optimal but the lab
+ * range excludes, the direction is the lab side (Cholesterol 205 vs <200 →
+ * HIGH).
  *
- * Inside the lab range but outside the optimal range → the same direction in
- * the sample doc's softer wording, with the asterisk the disclaimer explains.
- * Severity comes straight off the engine: mild reads BORDERLINE, anything
- * further out reads ABOVE OPTIMAL / SUBOPTIMAL.
+ * Not outside it → the sample doc's softer wording. Severity comes straight
+ * off the engine: mild reads BORDERLINE, anything further out reads ABOVE
+ * OPTIMAL / SUBOPTIMAL. The asterisk the disclaimer explains ("sits within the
+ * standard laboratory reference range") is added only when that is provable
+ * (`within` true); with no lab range to compare against the wording stands
+ * without it.
  */
 export function formatStatus(m: FlaggedMarker, within: boolean | null): string {
-  const inLab = within === true;
+  const outsideLab = within === false;
+  const star = within === true ? "*" : "";
 
-  if (m.flagStatus === "out_of_range") return inLab ? "OUT OF RANGE*" : "OUT OF RANGE";
-  if (m.flagStatus === "moderate") return inLab ? "MODERATE*" : "MODERATE";
+  if (m.flagStatus === "out_of_range") return `OUT OF RANGE${star}`;
+  if (m.flagStatus === "moderate") return `MODERATE${star}`;
 
-  const dir = m.flagDirection;
+  const dir = rowDirection(m);
   if (dir === "high") {
-    if (!inLab) return "HIGH";
-    return m.flagSeverity === "mild" ? "BORDERLINE HIGH*" : "ABOVE OPTIMAL*";
+    if (outsideLab) return "HIGH";
+    return m.flagSeverity === "mild" ? `BORDERLINE HIGH${star}` : `ABOVE OPTIMAL${star}`;
   }
   if (dir === "low") {
-    if (!inLab) return "LOW";
-    return m.flagSeverity === "mild" ? "BORDERLINE LOW*" : "SUBOPTIMAL*";
+    if (outsideLab) return "LOW";
+    return m.flagSeverity === "mild" ? `BORDERLINE LOW${star}` : `SUBOPTIMAL${star}`;
   }
   return m.flagStatus.toUpperCase();
 }
@@ -338,15 +435,17 @@ function formatDate(raw: string | null | undefined): string {
   return m ? m[1] : s;
 }
 
+/** The red and amber tiers: every marker the engine flagged, plus any the lab
+ *  range excludes even though the engine read it as optimal (markerTier). */
 export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
   return flagged
-    .filter(isFlagged)
+    .filter(isChartFlagged)
     .slice()
     .sort(compareRows)
     .map((m) => {
-      const within = withinLabRange(m);
+      const within = labVerdict(m);
       return {
-        marker: m.canonicalName,
+        marker: displayMarkerName(m),
         result: formatResult(m),
         labRange: formatLabRange(m),
         optimalRange: formatOptimalRange(m),
@@ -357,22 +456,22 @@ export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
     });
 }
 
-/** The in-range counterpart of buildChartRows: every marker the engine read
- *  as optimal, in the same category / name order, with the status the chip
+/** The green tier: every marker inside BOTH the lab range and the functional
+ *  optimal, in the same category / name order, with the status the chip
  *  vocabulary already knows ("OPTIMAL" -> green). A marker the engine could
  *  not evaluate (not_flaggable / informational) is in neither list. */
 export function buildOptimalRows(flagged: FlaggedMarker[]): ChartRow[] {
   return flagged
-    .filter((m) => m.flagStatus === "optimal")
+    .filter(isChartOptimal)
     .slice()
     .sort(compareRows)
     .map((m) => ({
-      marker: m.canonicalName,
+      marker: displayMarkerName(m),
       result: formatResult(m),
       labRange: formatLabRange(m),
       optimalRange: formatOptimalRange(m),
       status: "OPTIMAL",
-      withinLabRange: withinLabRange(m),
+      withinLabRange: labVerdict(m),
       category: findMarker(m.canonicalName)?.category ?? "",
     }));
 }
@@ -438,9 +537,10 @@ export interface ComparisonGroup {
  * panel and is deliberately left to Phase 2b.
  */
 export function comparisonStatus(m: FlaggedMarker, within: boolean | null): string {
-  if (within === true) return "Out of Optimal";
   if (within === false) return "Out of Lab Range";
-  return "Out of Optimal"; // no usable lab range: the flag came from the optimal/band side
+  // Inside the lab range, or no usable lab range: the flag came from the
+  // optimal/band side (same lab-first rule as markerTier).
+  return "Out of Optimal";
 }
 
 /**
@@ -456,17 +556,17 @@ export function buildComparisonGroups(flagged: FlaggedMarker[]): ComparisonGroup
   const labels = new Map(CATEGORY_DISPLAY.map((c) => [c.key, c.label]));
 
   const buckets = new Map<string, ComparisonRow[]>();
-  for (const m of flagged.filter(isFlagged)) {
+  for (const m of flagged.filter(isChartFlagged)) {
     const category = findMarker(m.canonicalName)?.category ?? "other";
-    const within = withinLabRange(m);
+    const within = labVerdict(m);
     const row: ComparisonRow = {
-      marker: m.canonicalName,
+      marker: displayMarkerName(m),
       prior: PRIOR_PENDING,
       current: formatResult(m),
       labRange: formatLabRange(m),
       optimalRange: formatOptimalRange(m),
       status: comparisonStatus(m, within),
-      direction: m.flagDirection,
+      direction: rowDirection(m),
       trend: TREND_PENDING,
       withinLabRange: within,
     };
@@ -596,20 +696,20 @@ export function buildMergedComparisonGroups(
 ): ComparisonGroup[] {
   const rank = new Map(CATEGORY_DISPLAY.map((c, i) => [c.key, i]));
   const labels = new Map(CATEGORY_DISPLAY.map((c) => [c.key, c.label]));
-  const byName = new Map(flagged.map((m) => [m.canonicalName, m]));
+  const byName = new Map(flagged.map((m) => [displayMarkerName(m), m]));
 
   const rowFor = (m: FlaggedMarker): ComparisonRow => {
-    const within = withinLabRange(m);
+    const within = labVerdict(m);
     const fact = priorFacts.get(m.canonicalName);
-    const isFlaggedNow = isFlagged(m);
+    const isFlaggedNow = isChartFlagged(m);
     return {
-      marker: m.canonicalName,
+      marker: displayMarkerName(m),
       prior: fact?.value ?? PRIOR_NOT_FOUND,
       current: formatResult(m),
       labRange: formatLabRange(m),
       optimalRange: formatOptimalRange(m),
       status: isFlaggedNow ? comparisonStatus(m, within) : "In Range",
-      direction: isFlaggedNow ? m.flagDirection : null,
+      direction: isFlaggedNow ? rowDirection(m) : null,
       trend: computeTrend(
         m.canonicalName,
         fact?.value ?? null,
@@ -625,9 +725,9 @@ export function buildMergedComparisonGroups(
   const rows: ComparisonRow[] = [];
   const seen = new Set<string>();
 
-  for (const m of flagged.filter(isFlagged)) {
+  for (const m of flagged.filter(isChartFlagged)) {
     rows.push(rowFor(m));
-    seen.add(m.canonicalName);
+    seen.add(displayMarkerName(m));
   }
   for (const [name, fact] of priorFacts) {
     if (seen.has(name)) continue;
@@ -709,9 +809,11 @@ function humanizeCategory(key: string): string {
 }
 
 export function buildReassuring(flagged: FlaggedMarker[]): ReassuringMarkers {
-  const optimal = flagged.filter((f) => f.flagStatus === "optimal");
+  // Inside both ranges. A value the lab range excludes is never "reassuring",
+  // even when the engine read it as inside the functional window.
+  const optimal = flagged.filter(isChartOptimal);
   const label = (m: FlaggedMarker) =>
-    `${m.canonicalName} (${m.value}${m.unit ? ` ${m.unit}` : ""})`;
+    `${displayMarkerName(m)} (${m.value}${m.unit ? ` ${m.unit}` : ""})`;
 
   const byName = new Map(optimal.map((m) => [m.canonicalName, m]));
   const notable: string[] = [];

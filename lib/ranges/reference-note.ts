@@ -29,7 +29,7 @@ export interface CompactedReference {
 /** The "Reference Ranges for <marker>:" header a stratified table leads with,
  *  optionally qualified ("Adult", "Pediatric"). Stripped for display: the
  *  column heading already says what this is. */
-const HEADER_RE = /^(?:[A-Za-z]+\s+)?Reference Ranges?\s+for\s+[^:]+:\s*/i;
+const HEADER_RE = /^(?:[A-Za-z]+\s+){0,3}Reference Ranges?\s+for\s+[^:]+:\s*/i;
 
 /** "Males: 0.3-13.4 ng/mL" -> "0.3-13.4". Returns null when absent. */
 function sexRange(note: string, sex: "male" | "female"): string | null {
