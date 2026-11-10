@@ -23,17 +23,25 @@
 
 import { NextResponse } from "next/server";
 import { parseQuestPdf } from "../../../../lib/parsers/quest";
-import { matchMarkers } from "../../../../lib/matcher";
-import { flagMarkers } from "../../../../lib/flagging";
+import type { ParseResult } from "../../../../lib/parsers/types";
 import {
   buildDeterministicAnalysis,
   buildMergedComparisonGroups,
   computePriorInterval,
 } from "../../../../lib/analysis/deterministic";
-import { dedupeRepeatedMarkers } from "../../../../lib/analysis/dedupe";
+import {
+  buildPanel,
+  mergePanels,
+  resolveDrawCycle,
+  toISODate,
+  unreadableNotice,
+  type BloodPanel,
+  type PanelNotice,
+} from "../../../../lib/analysis/merge-panels";
 import {
   applyHormoneOverlay,
   parseHormoneStatus,
+  resolveCycleLength,
 } from "../../../../lib/analysis/hormone-ranges";
 import {
   assertNoIdentifiers,
@@ -156,7 +164,10 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: "Please upload a valid PDF" }, { status: 400 });
   }
 
-  const file = form.get("file");
+  // One or more blood reports, every one appended under the same "file" key.
+  const files = form
+    .getAll("file")
+    .filter((f): f is File => typeof f !== "string" && !!f);
   const patientNameRaw = (form.get("patientName") as string | null)?.trim() || "";
   const patientDateRaw = (form.get("patientDate") as string | null)?.trim() || "";
   const dob = (form.get("dob") as string | null)?.trim() || "";
@@ -169,6 +180,12 @@ export async function POST(req: Request): Promise<Response> {
   // overlay itself validates both (blank / out-of-band length reads as 28).
   const cycleLength = (form.get("cycleLength") as string | null)?.trim() || null;
   const cycleDay = (form.get("cycleDay") as string | null)?.trim() || null;
+  // With several reports there is no single draw date, so the LMP count is
+  // redone here against the hormone file's own collection date. The LMP is
+  // clinical context used only on this machine; it never reaches the model.
+  const lmpDate = (form.get("lmpDate") as string | null)?.trim() || null;
+  const cycleDayTyped = (form.get("cycleDayTyped") as string | null) === "1";
+  const statusDerived = (form.get("statusDerived") as string | null) === "1";
   const intake = (form.get("intake") as string | null) || "";
   const skipNarrative = (form.get("skipNarrative") as string | null) === "1";
   const mode = (form.get("mode") as string | null) === "reeval" ? "reeval" : "initial";
@@ -182,19 +199,28 @@ export async function POST(req: Request): Promise<Response> {
   const patientName = patientNameRaw || "Patient";
   const patientDate = patientDateRaw || new Date().toISOString().slice(0, 10);
 
-  if (!file || typeof file === "string") {
+  if (!files.length) {
     return NextResponse.json({ error: "Please upload a valid PDF" }, { status: 400 });
   }
-  const isPdf =
-    file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-  if (!isPdf) {
-    return NextResponse.json({ error: "Please upload a valid PDF" }, { status: 400 });
-  }
-  if (file.size === 0) {
-    return NextResponse.json(
-      { error: "Could not read this PDF. Please check the file and try again." },
-      { status: 400 },
-    );
+  for (const f of files) {
+    const isPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      return NextResponse.json(
+        { error: files.length === 1 ? "Please upload a valid PDF" : `${f.name} is not a PDF` },
+        { status: 400 },
+      );
+    }
+    if (f.size === 0) {
+      return NextResponse.json(
+        {
+          error:
+            files.length === 1
+              ? "Could not read this PDF. Please check the file and try again."
+              : `${f.name} is empty. Please check the file and try again.`,
+        },
+        { status: 400 },
+      );
+    }
   }
 
   // ----- Re-eval mode requires a readable prior report -----
@@ -219,39 +245,79 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  // Sex is collected on the analysis form, so markers whose lab reference is
+  // printed per sex (leptin) can be flagged against the right row. The data
+  // report has no sex field and deliberately stays display-only for those.
+  const flaggingSex =
+    sex.toLowerCase() === "male" ? "male" : sex.toLowerCase() === "female" ? "female" : null;
 
-  let parsed;
-  try {
-    parsed = await parseQuestPdf(buffer);
-  } catch {
+  // ----- Parse every blood report; a file that cannot be read is a notice,
+  // never a failure, as long as at least one file parsed. -----
+  const panels: BloodPanel[] = [];
+  const notices: PanelNotice[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    let parsed: ParseResult | null = null;
+    try {
+      parsed = await parseQuestPdf(Buffer.from(await f.arrayBuffer()));
+    } catch {
+      parsed = null;
+    }
+    if (!parsed) {
+      notices.push({ filename: f.name, message: unreadableNotice(f.name) });
+      continue;
+    }
+    // match -> flag -> same-file dedupe, with the file's lab / date / name
+    // on every marker. The hormone overlay runs once, over the composite.
+    const built = buildPanel(parsed, f.name, i, flaggingSex);
+    if (built.panel) panels.push(built.panel);
+    else notices.push(built.notice);
+  }
+  if (!panels.length) {
     return NextResponse.json(
-      { error: "Could not read this PDF. Please check the file and try again." },
-      { status: 500 },
+      {
+        error:
+          files.length === 1
+            ? "Could not read this PDF. Please check the file and try again."
+            : `None of the uploaded blood reports could be read. ${notices.map((n) => n.message).join(". ")}.`,
+      },
+      { status: files.length === 1 ? 500 : 400 },
     );
   }
+  const composite = mergePanels(panels, notices);
+  const sourceHeaders: Record<string, string> = {
+    "X-Blood-Sources": String(composite.sources.length),
+    // Header values must be ASCII; filenames need not be.
+    "X-Source-Notices": encodeURIComponent(notices.map((n) => n.message).join("\n")),
+  };
 
   // ----- Deterministic half (never depends on the API) -----
   let analysis;
   try {
-    // Sex is collected on the analysis form, so markers whose lab reference is
-    // printed per sex (leptin) can be flagged against the right row. The data
-    // report has no sex field and deliberately stays display-only for those.
-    const flaggingSex =
-      sex.toLowerCase() === "male" ? "male" : sex.toLowerCase() === "female" ? "female" : null;
-    const engineFlagged = flagMarkers(matchMarkers(parsed.markers), { sex: flaggingSex });
+    // Cycle day at the draw: counted against the hormone file's collection
+    // date when an LMP was entered (the form could only count against the
+    // Patient Date). A typed day, or a deliberately chosen non-cycling
+    // status, is left alone.
+    const typedDay = cycleDayTyped && cycleDay !== null ? Number(cycleDay) : null;
+    const clientDay = cycleDay !== null && Number.isFinite(Number(cycleDay)) ? Number(cycleDay) : null;
+    const cycle = resolveDrawCycle({
+      lmpDate: flaggingSex === "female" ? lmpDate : null,
+      typedCycleDay: Number.isFinite(typedDay as number) ? typedDay : null,
+      clientCycleDay: clientDay,
+      cycleLength: resolveCycleLength(cycleLength).length,
+      status: hormoneStatus,
+      statusDerived,
+      drawDateISO: toISODate(composite.hormoneDrawDate),
+    });
     // Female hormone functional ranges (analysis path only). A no-op unless
     // sex is female; the lab tier the engine decided is never overridden.
-    const overlay = applyHormoneOverlay(engineFlagged, {
+    const overlay = applyHormoneOverlay(composite.markers, {
       sex: flaggingSex,
-      status: hormoneStatus,
+      status: cycle.status,
       cycleLength,
-      cycleDay,
+      cycleDay: cycle.cycleDay === null ? null : String(cycle.cycleDay),
     });
-    // One row per marker per draw: a merged upload can print the same marker
-    // twice (lib/analysis/dedupe). Applied after flagging + overlay so the
-    // "materially different" test sees the final verdicts.
-    const flagged = dedupeRepeatedMarkers(overlay.markers);
+    const flagged = overlay.markers;
 
     // ----- Saliva cortisol (optional; never fatal to the blood analysis) -----
     // Reduced to values / clock times / windows / statuses here; the raw
@@ -270,6 +336,7 @@ export async function POST(req: Request): Promise<Response> {
       }
     }
     const salivaHeaders: Record<string, string> = {
+      ...sourceHeaders,
       "X-Saliva-Cortisol": salivaCortisol
         ? `parsed; ${salivaCortisol.samples.length} samples; ${salivaCortisol.curve.pattern}`
         : salivaCortisolNote
@@ -282,11 +349,15 @@ export async function POST(req: Request): Promise<Response> {
       patientDate,
       dob,
       sex,
-      collectedDate: parsed.patientMeta.collectedDate,
-      reportedDate: parsed.patientMeta.reportedDate,
+      collectedDate: composite.collectedDate,
+      reportedDate: composite.reportedDate,
       hormone: overlay.summary,
       salivaCortisol,
       salivaCortisolNote,
+      sources: composite.sources,
+      multiSource: composite.multiSource,
+      spansYears: composite.spansYears,
+      sourceNotices: notices.map((n) => n.message),
     });
 
     // ----- Re-evaluation -----
@@ -381,7 +452,10 @@ export async function POST(req: Request): Promise<Response> {
       // recomputed here from prior vs current.
       const merged = {
         ...analysis,
-        comparisonGroups: buildMergedComparisonGroups(flagged, reeval.priorFacts),
+        comparisonGroups: buildMergedComparisonGroups(flagged, reeval.priorFacts, {
+          multiSource: analysis.multiSource,
+          withYear: analysis.spansYears,
+        }),
       };
       const buf = await generateReevalReport(merged, true, reeval, priorPanelDate);
       return reevalResponse(buf, patientNameRaw, patientDate, true, priorHeaders);

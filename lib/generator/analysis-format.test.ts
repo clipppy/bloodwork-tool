@@ -46,7 +46,7 @@ function ok(cond: boolean, msg: string) {
   if (cond) passed++;
   else failures.push(`  x ${msg}`);
 }
-const eq = (actual: string, expected: string, label: string) =>
+const eq = (actual: unknown, expected: unknown, label: string) =>
   ok(actual === expected, `${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
 
 function main() {

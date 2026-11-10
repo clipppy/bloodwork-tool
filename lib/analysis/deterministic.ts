@@ -25,6 +25,14 @@ import {
   type HormoneOverlaySummary,
 } from "./hormone-ranges";
 import type { SalivaCortisolFlags } from "./saliva-cortisol";
+import {
+  earlierReadingsOf,
+  formatEarlierReadings,
+  formatSourcesLine,
+  sourceOf,
+  sourceTag,
+  type PanelSource,
+} from "./panel-source";
 
 // ----- Fixed report text (verbatim from the Robidoux sample) -----
 
@@ -101,6 +109,33 @@ export interface ChartRow {
    *  the chip colour are both read off this: only false charts red. */
   withinLabRange: boolean | null;
   category: string;
+  /** "Quest · 08/26": which uploaded report this value came from. Set only
+   *  when the composite panel spans more than one distinct lab or date;
+   *  null for a single-report run, which therefore renders as before. */
+  sourceTag: string | null;
+  /** "earlier 4.1 g/dL · Quest 06/02": older readings of the same marker from
+   *  other uploaded reports, display only. null when there are none. */
+  earlier: string | null;
+}
+
+/** How the row builders tag provenance. Off by default so every existing
+ *  caller (and a single-report run) produces untagged rows. */
+export interface RowTagOptions {
+  /** Print per-row source tags (the composite spans >1 lab or date). */
+  multiSource?: boolean;
+  /** Include the year in the tag (the composite spans >1 year). */
+  withYear?: boolean;
+}
+
+function tagFor(m: FlaggedMarker, opts: RowTagOptions): string | null {
+  if (!opts.multiSource) return null;
+  const s = sourceOf(m);
+  return s ? sourceTag(s, opts.withYear ?? false) : null;
+}
+
+function earlierFor(m: FlaggedMarker, opts: RowTagOptions): string | null {
+  if (!opts.multiSource) return null;
+  return formatEarlierReadings(earlierReadingsOf(m), opts.withYear ?? false);
 }
 
 export interface ReassuringMarkers {
@@ -136,6 +171,17 @@ export interface DeterministicAnalysis {
   /** Non-fatal note when a saliva report was uploaded but could not be read,
    *  so the document says so instead of silently omitting the section. */
   salivaCortisolNote: string | null;
+  /** The uploaded blood reports that parsed, in upload order (one entry for
+   *  a single-file run). */
+  sources: PanelSource[];
+  /** True when the composite spans more than one distinct lab or date, i.e.
+   *  the chart rows carry source tags. */
+  multiSource: boolean;
+  /** True when the sources span more than one year (tags carry the year). */
+  spansYears: boolean;
+  /** Per-file notices for uploaded blood reports that could not be read.
+   *  Printed in the document; never fatal. */
+  sourceNotices: string[];
 }
 
 export interface AnalysisInputs {
@@ -155,6 +201,13 @@ export interface AnalysisInputs {
   salivaCortisol?: SalivaCortisolFlags | null;
   /** Set when a saliva report was uploaded but could not be read. */
   salivaCortisolNote?: string | null;
+  /** The blood reports that parsed (lib/analysis/merge-panels). Omitted by
+   *  the single-report callers and the tests: the header then prints
+   *  `collectedDate` as before and no row carries a source tag. */
+  sources?: PanelSource[] | null;
+  multiSource?: boolean;
+  spansYears?: boolean;
+  sourceNotices?: string[] | null;
 }
 
 /** Whole years between a "YYYY-MM-DD" DOB and `asOf`. null if unparseable. */
@@ -437,7 +490,7 @@ function formatDate(raw: string | null | undefined): string {
 
 /** The red and amber tiers: every marker the engine flagged, plus any the lab
  *  range excludes even though the engine read it as optimal (markerTier). */
-export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
+export function buildChartRows(flagged: FlaggedMarker[], opts: RowTagOptions = {}): ChartRow[] {
   return flagged
     .filter(isChartFlagged)
     .slice()
@@ -452,6 +505,8 @@ export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
         status: formatStatus(m, within),
         withinLabRange: within,
         category: findMarker(m.canonicalName)?.category ?? "",
+        sourceTag: tagFor(m, opts),
+        earlier: earlierFor(m, opts),
       };
     });
 }
@@ -460,7 +515,7 @@ export function buildChartRows(flagged: FlaggedMarker[]): ChartRow[] {
  *  optimal, in the same category / name order, with the status the chip
  *  vocabulary already knows ("OPTIMAL" -> green). A marker the engine could
  *  not evaluate (not_flaggable / informational) is in neither list. */
-export function buildOptimalRows(flagged: FlaggedMarker[]): ChartRow[] {
+export function buildOptimalRows(flagged: FlaggedMarker[], opts: RowTagOptions = {}): ChartRow[] {
   return flagged
     .filter(isChartOptimal)
     .slice()
@@ -473,6 +528,8 @@ export function buildOptimalRows(flagged: FlaggedMarker[]): ChartRow[] {
       status: "OPTIMAL",
       withinLabRange: labVerdict(m),
       category: findMarker(m.canonicalName)?.category ?? "",
+      sourceTag: tagFor(m, opts),
+      earlier: earlierFor(m, opts),
     }));
 }
 
@@ -522,6 +579,9 @@ export interface ComparisonRow {
   /** Placeholder for the improved/worsened half of the Status column. */
   trend: string;
   withinLabRange: boolean | null;
+  /** Provenance tags, as on ChartRow; null unless the composite is multi-source. */
+  sourceTag: string | null;
+  earlier: string | null;
 }
 
 export interface ComparisonGroup {
@@ -551,7 +611,10 @@ export function comparisonStatus(m: FlaggedMarker, within: boolean | null): stri
  * (the sample's "Improved" rows) can only be identified from the prior report,
  * so Phase 2b adds them; 2a never invents a row the current labs don't support.
  */
-export function buildComparisonGroups(flagged: FlaggedMarker[]): ComparisonGroup[] {
+export function buildComparisonGroups(
+  flagged: FlaggedMarker[],
+  opts: RowTagOptions = {},
+): ComparisonGroup[] {
   const rank = new Map(CATEGORY_DISPLAY.map((c, i) => [c.key, i]));
   const labels = new Map(CATEGORY_DISPLAY.map((c) => [c.key, c.label]));
 
@@ -569,6 +632,8 @@ export function buildComparisonGroups(flagged: FlaggedMarker[]): ComparisonGroup
       direction: rowDirection(m),
       trend: TREND_PENDING,
       withinLabRange: within,
+      sourceTag: tagFor(m, opts),
+      earlier: earlierFor(m, opts),
     };
     const bucket = buckets.get(category);
     if (bucket) bucket.push(row);
@@ -693,6 +758,7 @@ export function computeTrend(
 export function buildMergedComparisonGroups(
   flagged: FlaggedMarker[],
   priorFacts: Map<string, PriorMarkerFact>,
+  opts: RowTagOptions = {},
 ): ComparisonGroup[] {
   const rank = new Map(CATEGORY_DISPLAY.map((c, i) => [c.key, i]));
   const labels = new Map(CATEGORY_DISPLAY.map((c) => [c.key, c.label]));
@@ -719,6 +785,8 @@ export function buildMergedComparisonGroups(
         hormoneOverlayOf(m)?.optimal ?? null,
       ),
       withinLabRange: within,
+      sourceTag: tagFor(m, opts),
+      earlier: earlierFor(m, opts),
     };
   };
 
@@ -747,6 +815,8 @@ export function buildMergedComparisonGroups(
         direction: null,
         trend: "Not retested",
         withinLabRange: null,
+        sourceTag: null,
+        earlier: null,
       });
     }
   }
@@ -835,11 +905,19 @@ export function buildDeterministicAnalysis(
   flagged: FlaggedMarker[],
   inputs: AnalysisInputs,
 ): DeterministicAnalysis {
-  const collected = formatDate(inputs.collectedDate) || inputs.patientDate;
+  const sources = inputs.sources ?? [];
+  const multiSource = !!inputs.multiSource && sources.length > 0;
+  const spansYears = !!inputs.spansYears;
+  const tagOpts: RowTagOptions = { multiSource, withYear: spansYears };
+
+  // One report: the draw date as before. Several: every source, so the header
+  // documents which lab and date each part of the composite came from.
+  const drawDate = formatDate(inputs.collectedDate) || inputs.patientDate;
+  const collected = sources.length > 1 ? `Blood: ${formatSourcesLine(sources)}` : drawDate;
   const reported = formatDate(inputs.reportedDate) || "—";
 
-  // Age as of the draw when the PDF gives us a collection date, else today.
-  const collectedMatch = collected.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  // Age as of the (most recent) draw when a collection date is known, else today.
+  const collectedMatch = drawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   const asOf = collectedMatch
     ? new Date(
         Number(collectedMatch[3]),
@@ -875,14 +953,18 @@ export function buildDeterministicAnalysis(
       sex: sexDisplay,
       hormoneStatus,
     },
-    rows: buildChartRows(flagged),
-    comparisonGroups: buildComparisonGroups(flagged),
+    rows: buildChartRows(flagged, tagOpts),
+    comparisonGroups: buildComparisonGroups(flagged, tagOpts),
     reassuring: buildReassuring(flagged),
-    optimalRows: buildOptimalRows(flagged),
+    optimalRows: buildOptimalRows(flagged, tagOpts),
     age,
     sex,
     hormone,
     salivaCortisol: inputs.salivaCortisol ?? null,
     salivaCortisolNote: inputs.salivaCortisolNote ?? null,
+    sources,
+    multiSource,
+    spansYears,
+    sourceNotices: [...(inputs.sourceNotices ?? [])],
   };
 }

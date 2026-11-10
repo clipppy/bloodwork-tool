@@ -165,7 +165,8 @@ function main() {
     ["initial", INITIAL_NARRATIVE_SCHEMA],
     ["reeval", REEVAL_NARRATIVE_SCHEMA],
   ] as const) {
-    const field = (schema.properties as Record<string, any>).markerInterpretations;
+    type ArrayField = { type?: string; items?: { type?: string } } | undefined;
+    const field = (schema.properties as Record<string, ArrayField>).markerInterpretations;
     ok(!!field && field.type === "array", `${label} schema: markerInterpretations is an array`);
     ok(field?.items?.type === "object", `${label} schema: items are objects`);
     ok(

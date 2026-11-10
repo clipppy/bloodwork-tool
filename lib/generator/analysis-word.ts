@@ -232,6 +232,9 @@ function buildDocument(
     }),
   );
 
+  // Blood reports that could not be read (multi-PDF upload): say so here.
+  children.push(...buildSourceNotices(analysis));
+
   // 1. Clinical Presentation Summary — LLM
   children.push(sectionHeading("1. Clinical Presentation Summary"));
   children.push(
@@ -474,6 +477,7 @@ function buildReevalDocument(
   children.push(blank());
 
   // Part I — Overview (LLM, 2b)
+  children.push(...buildSourceNotices(analysis));
   children.push(sectionHeading("Part I: Overview"));
   children.push(
     ...(narrative
@@ -837,7 +841,7 @@ function buildComparisonTable(rows: ComparisonRow[], notes: ReadonlyMap<string, 
       new TableRow({
         cantSplit: true,
         children: [
-          chartCell(shortMarkerName(r.marker), RC_MARKER, { bold: true }),
+          markerCell(r, RC_MARKER, 20),
           priorCell(r.prior, RC_PRIOR),
           chartCell(r.current, RC_CURRENT, { bold: true }),
           chartCell(r.labRange, RC_LAB),
@@ -1495,7 +1499,7 @@ function buildChartTable(rows: ChartRow[], notes: ReadonlyMap<string, string>): 
         // the top of the next page; keeping it whole is far more readable.
         cantSplit: true,
         children: [
-          chartCell(shortMarkerName(r.marker), LC_MARKER, { bold: true }),
+          markerCell(r, LC_MARKER, 20),
           chartCell(r.result, LC_RESULT, { bold: true }),
           chartCell(r.labRange, LC_LAB),
           chartCell(displayOptimalRange(r.labRange, r.optimalRange), LC_OPTIMAL),
@@ -1560,7 +1564,7 @@ function buildOptimalTable(groups: Array<BodySystemGroup<ChartRow>>): Table {
         new TableRow({
           cantSplit: true,
           children: [
-            condensedCell(shortMarkerName(r.marker), LO_MARKER, { bold: true }),
+            markerCell(r, LO_MARKER, 18, true),
             condensedCell(r.result, LO_RESULT),
             condensedCell(r.labRange, LO_LAB),
             condensedCell(displayOptimalRange(r.labRange, r.optimalRange), LO_OPTIMAL),
@@ -1633,6 +1637,62 @@ function chartHeaderCell(
     margins: { top: 80, bottom: 80, left: 120, right: 120 },
     children: [new Paragraph({ children: [runBold(text)] })],
   });
+}
+
+/**
+ * Marker cell: the short name, then — only when the composite panel spans
+ * more than one uploaded report (lab or date) — a small grey provenance line
+ * ("Quest · 08/26") and, when an older reading of the same marker came from
+ * another report, a second one ("earlier 4.1 g/dL · Quest 06/02"). Both are
+ * null on a single-report run, so that document is unchanged: one paragraph,
+ * one run, as before.
+ */
+function markerCell(
+  row: Pick<ChartRow, "marker" | "sourceTag" | "earlier">,
+  width: number,
+  size: number,
+  condensed = false,
+): TableCell {
+  const margin = condensed ? 40 : 80;
+  const extras = [row.sourceTag, row.earlier].filter((t): t is string => !!t);
+  return new TableCell({
+    borders: bordersAll(),
+    width: { size: width, type: WidthType.DXA },
+    margins: { top: margin, bottom: margin, left: 120, right: 120 },
+    children: [
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: shortMarkerName(row.marker),
+            bold: true,
+            color: "000000",
+            size,
+            font: "Arial",
+          }),
+        ],
+      }),
+      ...extras.map(
+        (text) =>
+          new Paragraph({
+            children: [new TextRun({ text, color: GREY, size: 14, font: "Arial" })],
+          }),
+      ),
+    ],
+  });
+}
+
+/** Per-file notices for uploaded blood reports the tool could not read.
+ *  Printed under the header so a missing panel is never silent. */
+function buildSourceNotices(analysis: DeterministicAnalysis): Paragraph[] {
+  const notices = analysis.sourceNotices ?? [];
+  if (!notices.length) return [];
+  return notices.map(
+    (n, i) =>
+      new Paragraph({
+        spacing: { after: i === notices.length - 1 ? 200 : 60 },
+        children: [runItalic(`Note: ${n}. The analysis continued with the reports that could be read.`, "B26A00", 18)],
+      }),
+  );
 }
 
 function chartCell(

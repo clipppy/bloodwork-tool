@@ -55,7 +55,13 @@ type PriorPreview = {
 type GenStatus =
   | { kind: "idle" }
   | { kind: "processing" }
-  | { kind: "success"; narrated: boolean; salivaNote?: string | null }
+  | {
+      kind: "success";
+      narrated: boolean;
+      salivaNote?: string | null;
+      /** Blood reports the server could not read (the run continued without them). */
+      sourceNotes?: string[];
+    }
   | { kind: "error"; message: string; deterministicAvailable?: boolean };
 
 /** Parsing, matching and flagging finish in about a second; everything after
@@ -73,7 +79,9 @@ function todayISO(): string {
 }
 
 export default function AnalysisPage() {
-  const [file, setFile] = useState<File | null>(null);
+  // One or more blood reports; they are combined into one composite panel
+  // server side (most recent collection date wins where markers overlap).
+  const [files, setFiles] = useState<File[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [patientName, setPatientName] = useState("");
   const [patientDate, setPatientDate] = useState(todayISO());
@@ -141,20 +149,37 @@ export default function AnalysisPage() {
     return () => clearInterval(id);
   }, [generating]);
 
-  function acceptFile(f: File | undefined | null) {
-    if (!f) return;
-    const isPdf =
-      f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      setFileError("Please upload a PDF file");
-      return;
-    }
-    setFile(f);
-    setFileError(null);
+  /** Add every PDF in the selection to the list (a re-selection of the same
+   *  file is ignored); anything that is not a PDF is refused with a message. */
+  function acceptFiles(list: FileList | File[] | null | undefined) {
+    if (!list) return;
+    const incoming = Array.from(list);
+    if (!incoming.length) return;
+    const rejected = incoming.filter(
+      (f) => !(f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")),
+    );
+    const accepted = incoming.filter((f) => !rejected.includes(f));
+    setFiles((prev) => {
+      const seen = new Set(prev.map((p) => `${p.name}|${p.size}`));
+      return [...prev, ...accepted.filter((f) => !seen.has(`${f.name}|${f.size}`))];
+    });
+    setFileError(
+      rejected.length
+        ? `Please upload PDF files (skipped: ${rejected.map((f) => f.name).join(", ")})`
+        : null,
+    );
+    // Let the same file be picked again after it is removed.
+    if (inputRef.current) inputRef.current.value = "";
   }
 
-  function clearFile() {
-    setFile(null);
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+    setFileError(null);
+    setGen({ kind: "idle" });
+  }
+
+  function clearFiles() {
+    setFiles([]);
     setFileError(null);
     setGen({ kind: "idle" });
     if (inputRef.current) inputRef.current.value = "";
@@ -230,7 +255,7 @@ export default function AnalysisPage() {
   }
 
   async function generateAnalysis(skipNarrative = false) {
-    if (!file || generating) return;
+    if (!files.length || generating) return;
     if (mode === "reeval" && !priorFile) {
       setPriorError("Re-evaluation mode needs the prior report");
       return;
@@ -244,7 +269,8 @@ export default function AnalysisPage() {
     setGen({ kind: "processing" });
     try {
       const form = new FormData();
-      form.append("file", file);
+      // Every blood report under the same key; the server combines them.
+      for (const f of files) form.append("file", f);
       form.append("patientName", patientName);
       form.append("patientDate", patientDate);
       form.append("dob", dob);
@@ -255,6 +281,15 @@ export default function AnalysisPage() {
       // report's timing note. Resolved values: blank length = 28 days.
       form.append("cycleLength", sex === "female" ? String(cycleLength) : "");
       form.append("cycleDay", sex === "female" && cycleDay !== null ? String(cycleDay) : "");
+      // With several reports the server re-counts the LMP against the draw
+      // date of the report carrying the hormone panel; a typed cycle day, or
+      // a hand-picked status, is never overridden. Used on this machine only.
+      form.append("lmpDate", sex === "female" ? lmpDate : "");
+      form.append("cycleDayTyped", sex === "female" && typedCycleDay !== null ? "1" : "");
+      form.append(
+        "statusDerived",
+        sex === "female" && derivedStatus !== null && hormoneStatus === derivedStatus ? "1" : "",
+      );
       form.append("intake", intake);
       form.append("mode", mode);
       if (mode === "reeval" && priorFile) {
@@ -298,6 +333,17 @@ export default function AnalysisPage() {
       const salivaNote = salivaHeader.startsWith("skipped;")
         ? salivaHeader.slice("skipped;".length).trim()
         : null;
+      // Blood reports the server could not read; the run continued without
+      // them and the document says so too.
+      let sourceNotes: string[] = [];
+      try {
+        sourceNotes = decodeURIComponent(res.headers.get("X-Source-Notices") || "")
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } catch {
+        sourceNotes = [];
+      }
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -309,7 +355,7 @@ export default function AnalysisPage() {
       a.remove();
       URL.revokeObjectURL(url);
 
-      setGen({ kind: "success", narrated, salivaNote });
+      setGen({ kind: "success", narrated, salivaNote, sourceNotes });
     } catch {
       setGen({ kind: "error", message: "Something went wrong" });
     }
@@ -383,9 +429,9 @@ export default function AnalysisPage() {
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            acceptFile(e.dataTransfer.files?.[0]);
+            acceptFiles(e.dataTransfer.files);
           }}
-          className="mt-4 flex h-[280px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-center transition-colors"
+          className="mt-4 flex min-h-[280px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed text-center transition-colors"
           style={{
             borderColor: TEAL,
             backgroundColor: dragOver ? "#F0F6F8" : "transparent",
@@ -396,25 +442,54 @@ export default function AnalysisPage() {
             ref={inputRef}
             type="file"
             accept="application/pdf,.pdf"
+            multiple
             className="hidden"
-            onChange={(e) => acceptFile(e.target.files?.[0])}
+            onChange={(e) => acceptFiles(e.target.files)}
           />
-          {file ? (
-            <div className="px-6">
-              <p className="text-lg font-medium" style={{ color: NAVY }}>
-                {file.name}
+          {files.length ? (
+            <div className="w-full px-6 py-4">
+              <p className="text-sm font-medium" style={{ color: NAVY }}>
+                Blood reports &mdash; {files.length === 1 ? "1 PDF" : `${files.length} PDFs`}
               </p>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  clearFile();
-                }}
-                className="mt-2 text-sm underline"
-                style={{ color: TEAL }}
-              >
-                × Remove
-              </button>
+              <ul className="mx-auto mt-2 max-w-xl text-left">
+                {files.map((f, i) => (
+                  <li
+                    key={`${f.name}|${f.size}`}
+                    className="flex items-center justify-between gap-4 border-b py-1 text-base"
+                    style={{ borderColor: "#E5E7EB", color: NAVY }}
+                  >
+                    <span className="truncate font-medium">{f.name}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        removeFile(i);
+                      }}
+                      className="shrink-0 text-sm underline"
+                      style={{ color: TEAL }}
+                    >
+                      × Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-3 text-xs opacity-70">
+                Drop or click to add another report. Where a marker appears in more than
+                one report, the most recent draw is used and the earlier reading is noted.
+              </p>
+              {files.length > 1 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    clearFiles();
+                  }}
+                  className="mt-2 text-sm underline"
+                  style={{ color: TEAL }}
+                >
+                  Remove all
+                </button>
+              )}
             </div>
           ) : (
             <div className="px-6">
@@ -434,8 +509,12 @@ export default function AnalysisPage() {
                 <polyline points="17 8 12 3 7 8" />
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
-              <p className="text-base" style={{ color: NAVY }}>
-                Drop a lab PDF here, or click to browse
+              <p className="text-base font-medium" style={{ color: NAVY }}>
+                Blood reports &mdash; one or more PDFs
+              </p>
+              <p className="mt-1 text-sm opacity-80" style={{ color: NAVY }}>
+                Drop lab PDFs here, or click to browse. Several reports are combined
+                into one panel.
               </p>
             </div>
           )}
@@ -741,8 +820,9 @@ export default function AnalysisPage() {
                   style={{ borderColor: TEAL }}
                 />
                 <p className="mt-1 text-xs opacity-70">
-                  Counted against the Patient Date above to find the cycle day at
-                  the draw. Stays on this page; never sent.
+                  Counted against the draw date of the report carrying the hormone
+                  panel (previewed here against the Patient Date above). Used on
+                  this machine only; never sent to the model.
                 </p>
               </div>
               <div className="flex-1">
@@ -921,12 +1001,12 @@ export default function AnalysisPage() {
           <button
             type="button"
             onClick={() => generateAnalysis(false)}
-            disabled={!file || generating}
+            disabled={!files.length || generating}
             className="rounded-md border px-8 py-3 font-semibold text-white transition-colors"
             style={{
-              backgroundColor: !file || generating ? "#9CA3AF" : TEAL,
-              borderColor: !file || generating ? "#9CA3AF" : NAVY,
-              cursor: !file || generating ? "not-allowed" : "pointer",
+              backgroundColor: !files.length || generating ? "#9CA3AF" : TEAL,
+              borderColor: !files.length || generating ? "#9CA3AF" : NAVY,
+              cursor: !files.length || generating ? "not-allowed" : "pointer",
             }}
           >
             {mode === "reeval"
@@ -987,6 +1067,13 @@ export default function AnalysisPage() {
               <span aria-hidden="true">⚠</span> Saliva cortisol skipped: {gen.salivaNote}
             </p>
           )}
+          {gen.kind === "success" &&
+            (gen.sourceNotes ?? []).map((n) => (
+              <p key={n} className="mt-2 text-sm" style={{ color: "#B26A00" }} role="status">
+                <span aria-hidden="true">⚠</span> {n}. The analysis continued with the
+                reports that could be read.
+              </p>
+            ))}
           {gen.kind === "error" && (
             <div className="text-red-600">
               <div>
