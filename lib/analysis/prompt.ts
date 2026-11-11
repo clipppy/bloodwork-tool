@@ -237,18 +237,20 @@ export function cortisolContextLines(block: SalivaCortisolPayload | null | undef
       ? `morning-to-night change = ${block.curve.morningToNightDropPercent}% of the morning value.`
       : "morning-to-night change could not be computed (a sample is missing).",
     ...block.curve.notes.map((n) => `- ${n}`),
-    "Interpret the curve FUNCTIONALLY, the way this practitioner writes it up:",
-    "whether the morning peak is adequate (and where it sits in its window), how",
-    "the level comes down across the day (slope), any flattening or blunting, and",
-    "what the overall output looks like. Where the blood panel supports it, connect",
-    "the pattern to the rest of the picture (sleep, 'wired but tired', blood sugar,",
-    "thyroid, sex hormones) in plain language; say 'cortisol dysregulation' rather",
-    "than a disease label. Treat the shape as decision support, not a diagnosis.",
-    "Always include these caveats, in your own words: this is a single-day snapshot;",
-    "wake time, sleep aids and the timing of medications or supplements can shift",
-    "the curve; this pattern does not diagnose adrenal insufficiency; and an 8 AM",
-    "serum cortisol, with or without ACTH, is worth ordering only if symptoms",
-    "warrant it. Cite the sample values and windows exactly as given.",
+    "Interpret the curve FUNCTIONALLY, the way this practitioner writes it up, in",
+    "ONE focused paragraph of roughly four to six sentences: whether the morning",
+    "peak is adequate (and where it sits in its window), the shape of the decline",
+    "across the day (slope, any flattening or blunting), and the one or two most",
+    "relevant links to the blood panel (for example glucose or insulin, DHEA-S,",
+    "pregnenolone, thyroid, sleep or 'wired but tired'). Plain language; say",
+    "'cortisol dysregulation' rather than a disease label. Treat the shape as",
+    "decision support, not a diagnosis. Do not walk through the samples or repeat",
+    "their numbers; the table shows them. If you quote a value or window, copy it",
+    "exactly as given. Then close with the standard caveats compressed into one or",
+    "two short sentences, in your own words, keeping every one of them: single-day",
+    "snapshot; wake time, sleep aids and medication or supplement timing can shift",
+    "the curve; it does not diagnose adrenal insufficiency; and an 8 AM serum",
+    "cortisol, with or without ACTH, only if symptoms warrant it.",
   ].filter((line) => line !== "");
 }
 
@@ -256,14 +258,16 @@ function cortisolFieldSpec(block: SalivaCortisolPayload | null | undefined): str
   if (!block) return [];
   return [
     "",
-    "- cortisolInterpretation: array of strings, one per short paragraph (two to",
-    "    four), written for the practitioner: the diurnal cortisol reading described",
-    "    above — morning peak adequacy, decline across the day, flattening or",
-    "    blunting, overall output — framed functionally, followed by the standard",
-    "    caveats (single-day snapshot; wake-time / medication / sleep-aid timing are",
-    "    confounders; the pattern does not diagnose adrenal insufficiency; suggest an",
-    "    8 AM serum cortisol +/- ACTH only if symptoms warrant). Do not restate the",
-    "    cortisol table row by row; it is rendered by the tool.",
+    "- cortisolInterpretation: array of EXACTLY TWO strings, written for the",
+    "    practitioner. [0] ONE focused paragraph (about four to six sentences): the",
+    "    diurnal cortisol reading described above — morning peak adequacy, the shape",
+    "    of the decline, and the one or two most relevant links to other markers",
+    "    (e.g. glucose, DHEA-S, pregnenolone). [1] the standard caveats compressed",
+    "    into one or two short sentences, none dropped (single-day snapshot;",
+    "    wake-time / medication / sleep-aid timing are confounders; does not",
+    "    diagnose adrenal insufficiency; 8 AM serum cortisol +/- ACTH only if",
+    "    symptoms warrant). Do not restate the cortisol table row by row or repeat",
+    "    its numbers; it is rendered by the tool.",
   ];
 }
 

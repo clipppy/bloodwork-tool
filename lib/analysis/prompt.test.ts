@@ -14,12 +14,18 @@
  */
 
 import {
+  buildInitialAnalysisPrompt,
+  buildReevalPrompt,
+  cortisolContextLines,
   isEmptyPhaseEntry,
   markerNotesFrom,
   toAnalysisNarrative,
   toReevalNarrative,
   NarrativeParseError,
 } from "./prompt";
+import { buildPayload, buildReevalPayload } from "./deidentify";
+import { parseSalivaCortisolText } from "../parsers/saliva-cortisol";
+import { flagSalivaCortisol } from "./saliva-cortisol";
 import {
   INITIAL_NARRATIVE_SCHEMA,
   REEVAL_NARRATIVE_SCHEMA,
@@ -165,7 +171,13 @@ function main() {
     ["initial", INITIAL_NARRATIVE_SCHEMA],
     ["reeval", REEVAL_NARRATIVE_SCHEMA],
   ] as const) {
-    type ArrayField = { type?: string; items?: { type?: string } } | undefined;
+    type ItemsSchema = {
+      type?: string;
+      required?: readonly string[];
+      additionalProperties?: boolean;
+      properties?: Record<string, { type?: string } | undefined>;
+    };
+    type ArrayField = { type?: string; items?: ItemsSchema } | undefined;
     const field = (schema.properties as Record<string, ArrayField>).markerInterpretations;
     ok(!!field && field.type === "array", `${label} schema: markerInterpretations is an array`);
     ok(field?.items?.type === "object", `${label} schema: items are objects`);
@@ -209,6 +221,55 @@ function main() {
   ok(lenient.size === 1 && lenient.get("Glucose") === "trimmed", `bad entries dropped, names and notes trimmed, first wins (got ${JSON.stringify([...lenient])})`);
   const noField = toAnalysisNarrative({ ...initialJson([realPhase]), markerInterpretations: undefined as unknown as InitialNarrativeJson["markerInterpretations"] });
   ok(noField.markerNotes.size === 0, "initial: absent field is not a parse failure");
+
+  // ----- saliva cortisol instruction: one concise paragraph + brief caveats -----
+  // The practitioner found the interpretation accurate but too long (~5
+  // paragraphs). The instruction now asks for ONE focused paragraph plus the
+  // caveats compressed into a sentence or two, with none of the caveats dropped.
+  // Fixture through the real parser + flagger (same as saliva-cortisol.test).
+  const salivaLines = ["CORTISOL, LC/MS, SALIVA, 4 SAMPLES"];
+  [0.42, 0.14, 0.08, 0.03].forEach((v, i) => {
+    salivaLines.push(
+      `CORTISOL, LC/MS, SALIVA, SAMPLE ${i + 1}`,
+      `DRAW DATE ${i + 1} 04/10/2026`,
+      `DRAW TIME ${i + 1} ${["8:18AM", "12:45PM", "5:05PM", "9:20PM"][i]}`,
+      `CORTISOL, SALIVA SAMPLE ${i + 1} ${v} mcg/dL See Note 1`,
+    );
+  });
+  salivaLines.push("Note 1", "8-10 AM: 0.04-0.56 mcg/dL", "noon-2 PM: < or = 0.21 mcg/dL", "4-6 PM: < or = 0.15 mcg/dL", "10 PM-1 AM: < or = 0.09 mcg/dL");
+  const salivaParsed = parseSalivaCortisolText(salivaLines.join("\n"));
+  if (!salivaParsed) throw new Error("saliva fixture did not parse");
+  const cortisolFlags = flagSalivaCortisol(salivaParsed);
+  const withCortisol = buildPayload([], { age: 46, sex: "female", intake: "", patientName: "Jane Doe", salivaCortisol: cortisolFlags });
+  const cortisolBlock = withCortisol.salivaCortisol;
+  ok(cortisolBlock !== null && cortisolBlock.curve.pattern === "declining", "cortisol fixture: payload block built (declining)");
+  const context = cortisolContextLines(cortisolBlock).join(" ");
+  ok(/ONE focused paragraph of roughly four to six sentences/.test(context), "cortisol context: asks for one focused paragraph of 4-6 sentences");
+  ok(/shape of the decline/.test(context) && /morning\s+peak/.test(context), "cortisol context: morning peak and shape of the decline named");
+  ok(/one or two most\s+relevant links/.test(context) && /DHEA-S/.test(context) && /pregnenolone/.test(context), "cortisol context: limits links to the one or two most relevant markers");
+  ok(/caveats compressed into one or\s+two short sentences/.test(context), "cortisol context: caveats compressed into one or two sentences");
+  ok(/keeping every one of them/.test(context), "cortisol context: no caveat may be dropped");
+  for (const caveat of ["single-day snapshot", "wake time", "sleep aids", "medication or supplement timing", "does not diagnose adrenal insufficiency", "8 AM serum cortisol", "ACTH", "only if symptoms warrant"]) {
+    ok(context.includes(caveat), `cortisol context: caveat "${caveat}" still present`);
+  }
+  ok(/Do not walk through the samples or repeat\s+their numbers/.test(context), "cortisol context: no restated numbers the table already shows");
+  ok(/cortisol dysregulation/.test(context) && /decision support, not a diagnosis/.test(context), "cortisol context: practitioner voice and functional framing kept");
+  ok(!/two to\s+four/.test(context), "cortisol context: the old two-to-four-paragraph wording is gone");
+
+  const initialPrompt = buildInitialAnalysisPrompt(withCortisol);
+  const reevalPrompt = buildReevalPrompt(
+    buildReevalPayload([], { age: 46, sex: "female", intake: "", patientName: "Jane Doe", salivaCortisol: cortisolFlags, priorPanelInterval: null, priorReportText: "prior" }),
+  );
+  for (const [label, text] of [["initial", initialPrompt], ["reeval", reevalPrompt]] as const) {
+    const spec = text.slice(text.indexOf("- cortisolInterpretation:"));
+    ok(spec.length > 0, `${label} field spec: present`);
+    ok(/array of EXACTLY TWO strings/.test(spec), `${label} field spec: exactly two strings (paragraph + caveats)`);
+    ok(/\[0\] ONE focused paragraph \(about four to six sentences\)/.test(spec), `${label} field spec: first string is one 4-6 sentence paragraph`);
+    ok(/\[1\] the standard caveats compressed\s+into one or two short sentences, none dropped/.test(spec), `${label} field spec: second string is the compressed caveats, none dropped`);
+    ok(!/\(two to\s+four\)/.test(spec), `${label} field spec: old two-to-four wording gone`);
+    ok(/repeat\s+its numbers/.test(spec), `${label} field spec: no repeated numbers from the table`);
+  }
+  ok(!buildInitialAnalysisPrompt({ ...withCortisol, salivaCortisol: null }).includes("cortisol"), "no saliva block: prompt stays silent on cortisol");
 
   if (failures.length) {
     console.error(`prompt: ${failures.length} assertion(s) failed`);
