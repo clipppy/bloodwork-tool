@@ -187,14 +187,16 @@ export const INITIAL_NARRATIVE_SCHEMA = {
  */
 export const CORTISOL_INTERPRETATION_FIELD = stringArray(
   "Practitioner-facing interpretation of the 4-point salivary cortisol curve, " +
-    "one string per short paragraph (two to four). Cover the morning peak " +
-    "(adequate / low / high and where it sits in its window), the decline across " +
-    "the day (slope, any flattening or blunting), and overall output, framed " +
-    "functionally and in plain language. Close with the standard caveats: a " +
-    "single-day snapshot; wake time, sleep aids and medication timing are " +
-    "confounders; this pattern does not diagnose adrenal insufficiency; an 8 AM " +
-    "serum cortisol with or without ACTH is suggested only if symptoms warrant. " +
-    "Cite the sample values and windows exactly as given in `salivaCortisol`.",
+    "exactly two strings. [0] ONE focused paragraph (4-6 sentences): the morning " +
+    "peak (adequate / low / high and where it sits in its window), the shape of " +
+    "the decline across the day (slope, any flattening or blunting), and the one " +
+    "or two most relevant links to other markers (e.g. glucose, DHEA-S, " +
+    "pregnenolone), framed functionally and in plain language. [1] One or two " +
+    "short sentences of compressed caveats, none dropped: a single-day snapshot; " +
+    "wake time, sleep aids and medication timing are confounders; this pattern " +
+    "does not diagnose adrenal insufficiency; an 8 AM serum cortisol with or " +
+    "without ACTH only if symptoms warrant. Do not repeat the table's numbers; " +
+    "any value quoted must match `salivaCortisol` exactly.",
 );
 
 export type NarrativeSchemaOptions = {
