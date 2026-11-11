@@ -21,7 +21,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseQuestPdf } from "../lib/parsers/quest";
+import { parseLabReport } from "../lib/parsers/dispatch";
 import { matchMarkers } from "../lib/matcher";
 import { flagMarkers, type FlaggedMarker, type FlagStatus } from "../lib/flagging";
 import { findSamplePdfs } from "./sample-pdfs";
@@ -86,10 +86,11 @@ async function main() {
   const toolStricterByReport = new Map<string, number>();
   const unmatchedByReport: Array<{ report: string; rows: UnmatchedRow[] }> = [];
   const labFlagCountByReport = new Map<string, number>();
+  const insideOptimal: DisagreeRow[] = [];
 
   for (const p of pdfs) {
     const report = path.basename(p);
-    const parsed = await parseQuestPdf(fs.readFileSync(p));
+    const parsed = await parseLabReport(fs.readFileSync(p));
     const matched = matchMarkers(parsed.markers);
     const flagged = flagMarkers(matched);
 
@@ -118,6 +119,18 @@ async function main() {
         toolFlag: f.flagStatus,
         toolDir: toolDirection(f) ?? "—",
       };
+
+      // --- INSIDE OPTIMAL: lab flagged against its own range, but the tool
+      //     judged the value inside Melissa's optimal range (comparedAgainst
+      //     "optimal"), which the engine prefers by design. Not a silent miss:
+      //     the analysis chart tiers these red by lab range first
+      //     (deterministic.ts markerTier) and prints the lab's flag. Reported,
+      //     non-fatal. First seen on the Labcorp sample (RDW 11.4 vs 11.7-15.4
+      //     with an optimal of <=13). ---
+      if (f.flagStatus === "optimal" && f.comparedAgainst === "optimal") {
+        insideOptimal.push(row);
+        continue;
+      }
 
       // --- CRITICAL: lab flagged, tool says in-range (permissive) ---
       if (TOOL_IN_RANGE.has(f.flagStatus)) {
@@ -172,6 +185,23 @@ async function main() {
   }
 
   console.log("\n---------------------------------------------------------");
+  console.log(`🟡 LAB-FLAGGED, INSIDE OPTIMAL — tool "optimal" by Melissa's range: ${insideOptimal.length} case(s)`);
+  console.log("   (analysis chart tiers these red by lab range; data report shows the engine's verdict)");
+  console.log("---------------------------------------------------------");
+  if (insideOptimal.length === 0) {
+    console.log("  none ✓");
+  } else {
+    for (const r of insideOptimal) {
+      console.log(
+        `  🟡 ${r.report}\n` +
+          `       marker : ${r.raw}${r.canon !== r.raw ? `  → ${r.canon}` : ""}\n` +
+          `       value  : ${r.value}   printed range: ${r.printed}\n` +
+          `       lab    : ${r.labFlag}        tool: ${r.toolFlag} (vs optimal)`,
+      );
+    }
+  }
+
+  console.log("\n---------------------------------------------------------");
   console.log(`↔️  DIRECTION mismatches (lab H↔tool low / lab L↔tool high): ${direction.length} case(s)`);
   console.log("---------------------------------------------------------");
   if (direction.length === 0) {
@@ -209,8 +239,8 @@ async function main() {
 
   // Guard: the tool must NEVER go silent on a marker the lab flagged H/L. If it
   // does, fail loudly so the check flow catches it (the lab-flag safety net in
-  // flagging/index.ts should keep this at zero). Direction mismatches and the
-  // unmatched census are reported but non-fatal.
+  // flagging/index.ts should keep this at zero). Direction mismatches, the
+  // inside-optimal bucket and the unmatched census are reported but non-fatal.
   if (critical.length > 0) {
     console.error(
       `SAFETY NET BREACH — ${critical.length} marker(s) the lab flagged H/L are not surfaced by the tool (see CRITICAL above).\n`,

@@ -22,7 +22,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { parseQuestPdf } from "../../../../lib/parsers/quest";
+import { parseLabReport } from "../../../../lib/parsers/dispatch";
 import type { ParseResult } from "../../../../lib/parsers/types";
 import {
   buildDeterministicAnalysis,
@@ -259,7 +259,7 @@ export async function POST(req: Request): Promise<Response> {
     const f = files[i];
     let parsed: ParseResult | null = null;
     try {
-      parsed = await parseQuestPdf(Buffer.from(await f.arrayBuffer()));
+      parsed = await parseLabReport(Buffer.from(await f.arrayBuffer()));
     } catch {
       parsed = null;
     }

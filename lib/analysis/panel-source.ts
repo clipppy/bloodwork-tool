@@ -15,7 +15,7 @@ export interface PanelSource {
   /** Upload order, 0-based. Breaks ties deterministically. */
   index: number;
   filename: string;
-  /** "Quest", or "Unknown lab" when the layout was not recognised. */
+  /** "Quest" or "Labcorp", or "Unknown lab" when the layout was not recognised. */
   lab: string;
   /** "MM/DD/YYYY", or null when the file printed no readable collection date. */
   collectedDate: string | null;

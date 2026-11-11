@@ -325,6 +325,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   absolute_lymphocytes: {
     canonicalName: "Absolute Lymphocytes",
     aliases: [
+      "Lymphs (Absolute)",
       "ABSOLUTE LYMPHOCYTES",
       "Absolute Lymphocytes",
       "Lymphocytes, Absolute",
@@ -346,6 +347,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   absolute_monocytes: {
     canonicalName: "Absolute Monocytes",
     aliases: [
+      "Monocytes(Absolute)",
       "ABSOLUTE MONOCYTES",
       "Absolute Monocytes",
       "Monocytes, Absolute",
@@ -367,6 +369,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   absolute_eosinophils: {
     canonicalName: "Absolute Eosinophils",
     aliases: [
+      "Eos (Absolute)",
       "ABSOLUTE EOSINOPHILS",
       "Absolute Eosinophils",
       "Eosinophils, Absolute",
@@ -388,6 +391,8 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   absolute_basophils: {
     canonicalName: "Absolute Basophils",
     aliases: [
+      "Baso (Absolute)",
+      "Basos (Absolute)",
       "ABSOLUTE BASOPHILS",
       "Absolute Basophils",
       "Basophils, Absolute",
@@ -473,6 +478,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   lymphocytes: {
     canonicalName: "Lymphocytes",
     aliases: [
+      "Lymphs",
       "LYMPHOCYTES",
       "Lymph",
       "Lymph %",
@@ -550,6 +556,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   basophils: {
     canonicalName: "Basophils",
     aliases: [
+      "Basos",
       "BASOPHILS",
       "Baso",
       "Baso %",
@@ -759,6 +766,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   t4_free: {
     canonicalName: "T4 Free",
     aliases: [
+      "T4,Free(Direct)",
       "FT4",
       "Free T4",
       "Free Thyroxine",
@@ -813,6 +821,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   t3_free: {
     canonicalName: "T3 Free",
     aliases: [
+      "Triiodothyronine (T3), Free",
       "FT3",
       "Free T3",
       "T3 FREE",
@@ -982,6 +991,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   ast_aspartate_aminotransferase: {
     canonicalName: "AST (Aspartate Aminotransferase)",
     aliases: [
+      "AST (SGOT)",
       "ASPARTATE AMINOTRANSFERASE",
       "AST",
       "AST (ASPARTATE AMINOTRANSFERASE)",
@@ -1013,6 +1023,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   alt_alanine_aminotransferase: {
     canonicalName: "ALT (Alanine Aminotransferase)",
     aliases: [
+      "ALT (SGPT)",
       "ALANINE AMINOTRANSFERASE",
       "ALT",
       "ALT (ALANINE AMINOTRANSFERASE)",
@@ -1165,6 +1176,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   globulin: {
     canonicalName: "Globulin",
     aliases: [
+      "Globulin, Total",
       "GLOBULIN",
       "Globulin",
       "Total Globulin",
@@ -1248,6 +1260,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   ldl_low_density_lipoprotein_cholesterol: {
     canonicalName: "LDL (Low Density Lipoprotein Cholesterol)",
     aliases: [
+      "LDL Chol Calc (NIH)",
       "LDL",
       "LDL (LOW DENSITY LIPOPROTEIN CHOLESTEROL)",
       "LDL (Low Density Lipoprotein Cholesterol)",
@@ -1453,6 +1466,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   hs_crp: {
     canonicalName: "Hs-CRP",
     aliases: [
+      "C-Reactive Protein, Cardiac",
       "C-Reactive Protein",
       "C-Reactive Protein, High Sensitivity",
       "CRP",
@@ -1602,6 +1616,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   co2_carbon_dioxide: {
     canonicalName: "CO2 (Carbon Dioxide)",
     aliases: [
+      "Carbon Dioxide, Total",
       "Bicarbonate",
       "CARBON DIOXIDE",
       "CO2",
@@ -1784,6 +1799,7 @@ export const OPTIMAL_RANGES: Record<string, MarkerRange> = {
   tibc_total_iron_binding_capacity: {
     canonicalName: "TIBC (Total Iron Binding Capacity)",
     aliases: [
+      "Iron Bind.Cap.(TIBC)",
       "IRON BINDING CAPACITY",
       "Iron Binding Capacity",
       "TIBC",

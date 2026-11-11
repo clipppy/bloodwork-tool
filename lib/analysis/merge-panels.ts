@@ -109,6 +109,7 @@ export function labNameOf(meta: Pick<PatientMeta, "labSource">): string {
   // A Function-distributed report is still a Quest report (Health Gorilla
   // wraps Quest output); the practitioner knows it as Quest.
   if (meta.labSource === "Quest" || meta.labSource === "Function") return "Quest";
+  if (meta.labSource === "Labcorp") return "Labcorp";
   return "Unknown lab";
 }
 

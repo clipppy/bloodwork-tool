@@ -12,7 +12,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { parseQuestPdf } from "../../../lib/parsers/quest";
+import { parseLabReport } from "../../../lib/parsers/dispatch";
 import { matchMarkers } from "../../../lib/matcher";
 import { flagMarkers } from "../../../lib/flagging";
 import { generateWordReport } from "../../../lib/generator/word";
@@ -82,7 +82,7 @@ export async function POST(req: Request): Promise<Response> {
   // ----- Parse (isolate parser failures for a friendly message) -----
   let parsed;
   try {
-    parsed = await parseQuestPdf(buffer);
+    parsed = await parseLabReport(buffer);
   } catch {
     return NextResponse.json(
       { error: "Could not read this PDF. Please check the file and try again." },

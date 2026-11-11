@@ -20,7 +20,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseQuestPdf } from "../lib/parsers/quest";
+import { parseLabReport } from "../lib/parsers/dispatch";
 import { matchMarkers } from "../lib/matcher";
 import { flagMarkers, type FlaggedMarker } from "../lib/flagging";
 import { parseReferenceRange } from "../lib/flagging/range-parse";
@@ -41,7 +41,7 @@ interface PdfResult {
 
 async function runOne(p: string): Promise<PdfResult> {
   const buf = fs.readFileSync(p);
-  const parsed = await parseQuestPdf(buf);
+  const parsed = await parseLabReport(buf);
   const matched = matchMarkers(parsed.markers);
   const flagged = flagMarkers(matched);
   return { label: path.basename(p), flagged };
@@ -477,7 +477,7 @@ async function diffMain() {
   let markersCompared = 0;
   for (const p of present) {
     const buf = fs.readFileSync(p);
-    const parsed = await parseQuestPdf(buf);
+    const parsed = await parseLabReport(buf);
     const matched = matchMarkers(parsed.markers);
     const newFlags = flagMarkers(matched);
     const oldFlags = flagOld(matched);

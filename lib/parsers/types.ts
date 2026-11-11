@@ -41,15 +41,21 @@ export interface ParsedMarker {
   /** True when this row was produced by the ANA SCREEN/TITER/PATTERN
    *  synthesis post-processing step (debug aid). */
   anaSynthesized?: boolean;
+  /** Labcorp prints a "Previous Result and Date" column next to the current
+   *  result. Captured for later trend use; NEVER the current value. Undefined
+   *  for layouts without the column (Quest). */
+  previousValue?: number | string | null;
+  /** mm/dd/yyyy of the previous result, when printed. */
+  previousDate?: string | null;
 }
 
 export interface PatientMeta {
   collectedDate: string | null;
   reportedDate: string | null;
   /** "Quest" if the PDF is a direct Quest report, "Function" if it's a
-   *  Health Gorilla / Function Health distribution wrapping Quest, "Unknown"
-   *  otherwise. */
-  labSource: "Quest" | "Function" | "Unknown";
+   *  Health Gorilla / Function Health distribution wrapping Quest, "Labcorp"
+   *  for a Labcorp patient report, "Unknown" otherwise. */
+  labSource: "Quest" | "Function" | "Labcorp" | "Unknown";
 }
 
 export interface ParseResult {

@@ -67,6 +67,14 @@ const ALIAS_TABLE: Array<{ alias: string; normalized: string; rec: MarkerRange }
     return out;
   })();
 
+/** Normalized names that must never fuzzy-match (see step 2b in
+ *  resolveCandidates). Keep each entry normalized (lowercase, no commas). */
+const NO_FUZZY_MATCH: ReadonlySet<string> = new Set([
+  "vldl cholesterol cal",
+  "vldl cholesterol",
+  "vldl",
+]);
+
 interface MatchAttempt {
   rec: MarkerRange;
   confidence: "exact" | "normalized" | "fuzzy";
@@ -126,6 +134,15 @@ function resolveCandidates(rawName: string): {
   const dedupedNormalized = uniqByRec(normalizedHits);
   if (dedupedNormalized.length > 0) {
     return { candidates: dedupedNormalized, triedFuzzy: false };
+  }
+
+  // 2b. Names with NO dictionary record that sit within fuzzy distance of an
+  //     unrelated marker resolve as unmatched instead. Labcorp's "VLDL
+  //     Cholesterol Cal" is two edits from "LDL Cholesterol Calc" and was
+  //     charting as a second LDL row. Add a dictionary record to start
+  //     matching a listed name.
+  if (NO_FUZZY_MATCH.has(normalized)) {
+    return { candidates: [], triedFuzzy: false };
   }
 
   // 3. Fuzzy match — find every alias within the edit-distance threshold,
