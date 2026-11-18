@@ -228,6 +228,8 @@ export const SYSTEM_MARKERS: Record<BodySystem, readonly string[]> = {
     "Magnesium",
     "Magnesium RBC",
     "Zinc",
+    "Iodine",
+    "Selenium",
     // Toxic elements — elemental analysis, reported with the mineral panel
     "Lead Venous",
     "Mercury Blood",
